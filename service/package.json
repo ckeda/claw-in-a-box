@@ -1,0 +1,9 @@
+{
+  "name": "claw-in-a-box",
+  "version": "0.1.0",
+  "description": "Bounded authorization for AI agents: delegatable capability tokens with cascading revocation, plus spend-policy verdicts.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "test": "node test.js" },
+  "engines": { "node": ">=18" },
+  "license": "Apache-2.0"
+}
