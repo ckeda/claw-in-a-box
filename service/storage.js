@@ -1,22 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// storage.js — optional MySQL persistence layer (v0.8.0).
-//
-// Modes (env PERSISTENCE): "off" (default) | "shadow" | "on"
-//   off    — no DB, no mysql2 require. Byte-identical to v0.7 behavior.
-//   shadow — memory is the source of truth; every mutation is ALSO written to
-//            MySQL, fire-and-forget. DB failures are counted, never thrown.
-//   on     — shadow + hydrate at boot: revoked tokens, today's spend ledger,
-//            operator bindings and PENDING approvals are restored from MySQL
-//            into memory before traffic resumes. Memory remains the runtime
-//            source of truth — reads never touch the DB.
-//
-// Design rule inherited from the x402 layers: an unreachable database must
-// never crash or block the process. Connect failures retry every 60s in the
-// background; while disconnected all hooks are silent no-ops.
+// storage.js — optional MySQL persistence plus the v0.8.1 hard-DB identity
+// boundary. Ordinary v0.8 state remains memory-first/fire-and-forget. Agent
+// claims and secret rotation are deliberately different: they only succeed in
+// PERSISTENCE=on after a live database has been hydrated.
 
 "use strict";
 
 const MODE = String(process.env.PERSISTENCE || "off").toLowerCase();
+const EVENT_LIMIT = Number(process.env.EVENT_LIMIT || 100000);
 
 const state = {
   mode: MODE,
@@ -28,6 +19,9 @@ const state = {
 };
 
 let pool = null;
+let retryTimer = null;
+let reconnect = null;
+let hydrateTargets = null;
 
 const TABLES = [
   `CREATE TABLE IF NOT EXISTS revoked_tokens (
@@ -52,15 +46,96 @@ const TABLES = [
      chat_id VARCHAR(64) NOT NULL,
      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
    )`,
+  `CREATE TABLE IF NOT EXISTS agents (
+     agent_id VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY,
+     secret_hash CHAR(64) NOT NULL,
+     claimed_at VARCHAR(32) NOT NULL,
+     claimed_by VARCHAR(191) NULL,
+     strict_mode BOOLEAN NOT NULL DEFAULT FALSE,
+     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+   )`,
+  `CREATE TABLE IF NOT EXISTS verdicts (
+     id VARCHAR(64) PRIMARY KEY,
+     agent_id VARCHAR(191) NOT NULL,
+     amount DOUBLE NOT NULL,
+     day CHAR(10) NOT NULL,
+     status VARCHAR(16) NOT NULL,
+     issued_at VARCHAR(32) NOT NULL,
+     consumed_at VARCHAR(32) NULL,
+     INDEX verdict_status_issued (status, issued_at)
+   )`,
+  `CREATE TABLE IF NOT EXISTS events (
+     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+     ts TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+     type VARCHAR(64) NOT NULL,
+     agent_id VARCHAR(191) NULL,
+     ref_id VARCHAR(191) NULL,
+     payload JSON NOT NULL,
+     INDEX event_type_ts (type, ts),
+     INDEX event_agent_ts (agent_id, ts)
+   )`,
 ];
 
-// fire-and-forget write; safe in every mode and every connection state
+function featureDisabled(detail = "identity persistence is unavailable") {
+  const error = new Error(detail);
+  error.code = "feature_disabled";
+  error.status = 503;
+  return error;
+}
+
+function alreadyClaimed() {
+  const error = new Error("agent_id is already claimed");
+  error.code = "already_claimed";
+  error.status = 409;
+  return error;
+}
+
+function isDuplicate(error) {
+  return error && (error.code === "ER_DUP_ENTRY" || error.errno === 1062);
+}
+
+function recordFailure(error) {
+  state.writes_failed++;
+  state.last_error = error && error.message ? error.message : String(error);
+}
+
+function markDisconnected(error) {
+  state.db_connected = false;
+  recordFailure(error);
+  if (reconnect && !retryTimer) {
+    retryTimer = setTimeout(reconnect, 60000);
+    retryTimer.unref();
+  }
+}
+
 function fire(sql, params) {
   if (!pool || !state.db_connected) return;
-  pool
-    .execute(sql, params)
+  pool.execute(sql, params)
     .then(() => { state.writes_ok++; })
-    .catch((e) => { state.writes_failed++; state.last_error = e.message; });
+    .catch(markDisconnected);
+}
+
+function audit(type, agentId = null, refId = null, payload = {}) {
+  if (!pool || !state.db_connected) return;
+  pool.execute(
+    "INSERT INTO events (type, agent_id, ref_id, payload) VALUES (?,?,?,?)",
+    [type, agentId, refId, JSON.stringify(payload || {})]
+  ).then(() => {
+    state.writes_ok++;
+    return pool.execute(
+      "DELETE FROM events WHERE id <= (" +
+      "SELECT cutoff FROM (SELECT id AS cutoff FROM events ORDER BY id DESC LIMIT 1 OFFSET ?) AS old_events)",
+      [EVENT_LIMIT]
+    );
+  }).catch(markDisconnected);
+}
+
+function hardReady() {
+  return MODE === "on" && Boolean(pool) && state.db_connected && state.hydrated;
+}
+
+function requireHardReady() {
+  if (!hardReady()) throw featureDisabled();
 }
 
 function init() {
@@ -89,79 +164,191 @@ function init() {
   return new Promise((resolve) => {
     let settled = false;
     async function tryConnect() {
+      retryTimer = null;
       try {
         const conn = await pool.getConnection();
-        try { for (const t of TABLES) await conn.query(t); } finally { conn.release(); }
+        try {
+          for (const table of TABLES) await conn.query(table);
+        } finally {
+          conn.release();
+        }
         state.db_connected = true;
         console.log(`[persistence] MySQL connected, tables ready (mode=${MODE})`);
-      } catch (e) {
+        if (hydrateTargets && !state.hydrated) await hydrate(hydrateTargets);
+      } catch (error) {
         state.db_connected = false;
-        state.last_error = e.message;
-        console.error("[persistence] connect failed, retrying in 60s:", e.message);
-        setTimeout(tryConnect, 60000).unref();
+        state.last_error = error.message;
+        console.error("[persistence] connect failed, retrying in 60s:", error.message);
+        retryTimer = setTimeout(tryConnect, 60000);
+        retryTimer.unref();
       }
-      if (!settled) { settled = true; resolve(state); }
+      if (!settled) {
+        settled = true;
+        resolve(state);
+      }
     }
+    reconnect = tryConnect;
     tryConnect();
   });
 }
 
-// Boot-time hydration (mode "on" only). targets:
-//   { revoked:Set, dailySpend:Map, operatorBindings:Map, restoreApproval(id,row) }
+// targets: revoked, dailySpend, operatorBindings, restoreApproval,
+// restoreClaimedAgent. Hydration is all-or-nothing from the security layer's
+// point of view: state.hydrated only flips after the agent rows are loaded.
 async function hydrate(targets) {
+  hydrateTargets = targets;
   if (MODE !== "on" || !pool || !state.db_connected) return;
   try {
     const today = new Date().toISOString().slice(0, 10);
     const [rev] = await pool.query("SELECT tid FROM revoked_tokens");
-    for (const r of rev) targets.revoked.add(r.tid);
-    const [sp] = await pool.query("SELECT agent_id, day, spent FROM daily_spend WHERE day = ?", [today]);
-    for (const r of sp) targets.dailySpend.set(r.agent_id, { day: r.day, spent: Number(r.spent) });
-    const [ob] = await pool.query("SELECT agent_id, chat_id FROM operator_bindings");
-    for (const r of ob) targets.operatorBindings.set(r.agent_id, String(r.chat_id));
-    const [ap] = await pool.query("SELECT id, payload FROM approvals WHERE status = 'pending'");
-    for (const r of ap) {
-      const row = typeof r.payload === "string" ? JSON.parse(r.payload) : r.payload;
-      targets.restoreApproval(r.id, row);
+    for (const row of rev) targets.revoked.add(row.tid);
+    const [spend] = await pool.query(
+      "SELECT agent_id, day, spent FROM daily_spend WHERE day = ?", [today]
+    );
+    for (const row of spend) {
+      targets.dailySpend.set(row.agent_id, { day: row.day, spent: Number(row.spent) });
     }
+    const [bindings] = await pool.query("SELECT agent_id, chat_id FROM operator_bindings");
+    for (const row of bindings) {
+      targets.operatorBindings.set(row.agent_id, String(row.chat_id));
+    }
+    const [pending] = await pool.query(
+      "SELECT id, payload FROM approvals WHERE status = 'pending'"
+    );
+    for (const row of pending) {
+      const payload = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
+      targets.restoreApproval(row.id, payload);
+    }
+    const [agents] = await pool.query(
+      "SELECT agent_id, secret_hash, claimed_at, claimed_by, strict_mode FROM agents"
+    );
+    for (const row of agents) targets.restoreClaimedAgent(row);
     state.hydrated = true;
     console.log(
-      `[persistence] hydrated: revoked=${rev.length} spend=${sp.length} ` +
-      `bindings=${ob.length} pending_approvals=${ap.length}`
+      `[persistence] hydrated: revoked=${rev.length} spend=${spend.length} ` +
+      `bindings=${bindings.length} pending_approvals=${pending.length} agents=${agents.length}`
     );
-  } catch (e) {
-    state.last_error = e.message;
-    console.error("[persistence] hydrate failed (memory continues empty):", e.message);
+  } catch (error) {
+    markDisconnected(error);
+    console.error("[persistence] hydrate failed (security features remain closed):", error.message);
   }
 }
 
-const approvalRow = (a) => { const { waiters, ...rest } = a; return rest; };
+// Reserve an agent id in an open transaction. The row is invisible until the
+// payment middleware reports a successful settlement and commitClaim commits.
+// A competing INSERT waits on the unique key and then fails before it settles.
+async function beginClaim(agentId, secretHash, claimedAt) {
+  requireHardReady();
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    await conn.execute(
+      "INSERT INTO agents (agent_id, secret_hash, claimed_at, claimed_by, strict_mode) VALUES (?,?,?,NULL,FALSE)",
+      [agentId, secretHash, claimedAt]
+    );
+    return { conn, agentId, secretHash, claimedAt, done: false, committed: false };
+  } catch (error) {
+    if (conn) {
+      try { await conn.rollback(); } catch {}
+      conn.release();
+    }
+    if (isDuplicate(error)) throw alreadyClaimed();
+    markDisconnected(error);
+    throw featureDisabled();
+  }
+}
+
+async function commitClaim(transaction, payer) {
+  if (!transaction || transaction.done) return;
+  const { conn, agentId } = transaction;
+  try {
+    await conn.execute("UPDATE agents SET claimed_by=? WHERE agent_id=?", [payer, agentId]);
+    await conn.commit();
+    transaction.done = true;
+    transaction.committed = true;
+    state.writes_ok++;
+  } catch (error) {
+    try { await conn.rollback(); } catch {}
+    transaction.done = true;
+    markDisconnected(error);
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+async function rollbackClaim(transaction) {
+  if (!transaction || transaction.done) return;
+  transaction.done = true;
+  try { await transaction.conn.rollback(); } catch (error) { recordFailure(error); }
+  transaction.conn.release();
+}
+
+async function rotateAgent(agentId, oldHash, newHash) {
+  requireHardReady();
+  try {
+    const [result] = await pool.execute(
+      "UPDATE agents SET secret_hash=? WHERE agent_id=? AND secret_hash=?",
+      [newHash, agentId, oldHash]
+    );
+    if (Number(result.affectedRows) !== 1) {
+      const error = new Error("agent secret is invalid or was already rotated");
+      error.code = "forbidden";
+      error.status = 403;
+      throw error;
+    }
+    state.writes_ok++;
+  } catch (error) {
+    if (error.status === 403) throw error;
+    markDisconnected(error);
+    throw featureDisabled();
+  }
+}
+
+const approvalRow = (approval) => {
+  const { waiters, ...rest } = approval;
+  return rest;
+};
 
 module.exports = {
   state,
   init,
   hydrate,
+  hardReady,
+  beginClaim,
+  commitClaim,
+  rollbackClaim,
+  rotateAgent,
+  audit,
   saveRevoked: (tid) => fire("INSERT IGNORE INTO revoked_tokens (tid) VALUES (?)", [tid]),
-  saveSpend: (agentId, day, spent) =>
-    fire(
-      "INSERT INTO daily_spend (agent_id, day, spent) VALUES (?,?,?) " +
-      "ON DUPLICATE KEY UPDATE day=VALUES(day), spent=VALUES(spent)",
-      [agentId, day, spent]
-    ),
-  saveApproval: (a) =>
-    fire(
-      "INSERT INTO approvals (id, status, payload) VALUES (?,?,?) " +
-      "ON DUPLICATE KEY UPDATE status=VALUES(status), payload=VALUES(payload)",
-      [a.id, a.status, JSON.stringify(approvalRow(a))]
-    ),
-  updateApproval: (a) =>
-    fire("UPDATE approvals SET status=?, payload=?, resolved_at=NOW() WHERE id=?",
-      [a.status, JSON.stringify(approvalRow(a)), a.id]),
+  saveSpend: (agentId, day, spent) => fire(
+    "INSERT INTO daily_spend (agent_id, day, spent) VALUES (?,?,?) " +
+    "ON DUPLICATE KEY UPDATE day=VALUES(day), spent=VALUES(spent)",
+    [agentId, day, spent]
+  ),
+  saveApproval: (approval) => fire(
+    "INSERT INTO approvals (id, status, payload) VALUES (?,?,?) " +
+    "ON DUPLICATE KEY UPDATE status=VALUES(status), payload=VALUES(payload)",
+    [approval.id, approval.status, JSON.stringify(approvalRow(approval))]
+  ),
+  updateApproval: (approval) => fire(
+    "UPDATE approvals SET status=?, payload=?, resolved_at=NOW() WHERE id=?",
+    [approval.status, JSON.stringify(approvalRow(approval)), approval.id]
+  ),
   deleteApproval: (id) => fire("DELETE FROM approvals WHERE id=?", [id]),
-  saveBinding: (agentId, chatId) =>
-    fire(
-      "INSERT INTO operator_bindings (agent_id, chat_id) VALUES (?,?) " +
-      "ON DUPLICATE KEY UPDATE chat_id=VALUES(chat_id)",
-      [agentId, chatId]
-    ),
+  saveBinding: (agentId, chatId) => fire(
+    "INSERT INTO operator_bindings (agent_id, chat_id) VALUES (?,?) " +
+    "ON DUPLICATE KEY UPDATE chat_id=VALUES(chat_id)",
+    [agentId, chatId]
+  ),
+  saveVerdict: (verdict) => fire(
+    "INSERT INTO verdicts (id, agent_id, amount, day, status, issued_at, consumed_at) VALUES (?,?,?,?,?,?,NULL)",
+    [verdict.id, verdict.agent_id, verdict.amount, verdict.day, verdict.status, verdict.issued_at]
+  ),
+  updateVerdict: (verdict) => fire(
+    "UPDATE verdicts SET status=?, consumed_at=? WHERE id=?",
+    [verdict.status, verdict.consumed_at || null, verdict.id]
+  ),
   purgeOldSpend: (today) => fire("DELETE FROM daily_spend WHERE day <> ?", [today]),
 };

@@ -32,6 +32,38 @@ const operatorBindings = new Map(); // agent_id -> chat_id
 const pendingBinds = new Map();     // one-time code -> { agent_id, created }
 const BIND_TTL_MS = 15 * 60 * 1000; // a bind code is valid for 15 minutes
 
+// v0.8.1 Pay-to-Claim identity cache. This is hydrated from MySQL before the
+// hard-DB feature is marked ready. Secrets never enter this map in plaintext.
+// agent_id -> { secret_hash, claimed_at, claimed_by, strict_mode }
+const claimedAgents = new Map();
+
+const secretHash = (secret) =>
+  crypto.createHash("sha256").update(String(secret), "utf8").digest("hex");
+
+function newAgentSecret() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function secretsEqual(presented, expectedHash) {
+  const candidate = Buffer.from(secretHash(presented), "hex");
+  const expected = Buffer.from(String(expectedHash || ""), "hex");
+  return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
+}
+
+function requireAgentSecret(req, agentId, { strictOnly = false } = {}) {
+  const rawAgentId = String(agentId);
+  const claimed = claimedAgents.get(rawAgentId) || claimedAgents.get(rawAgentId.trim());
+  if (!claimed || (strictOnly && !claimed.strict_mode)) return claimed;
+  const presented = req.get("X-Agent-Secret") || "";
+  if (!secretsEqual(presented, claimed.secret_hash)) {
+    const error = new Error("a valid X-Agent-Secret is required for this claimed agent_id");
+    error.code = "forbidden";
+    error.status = 403;
+    throw error;
+  }
+  return claimed;
+}
+
 function chatForAgent(agentId) {
   return operatorBindings.get(String(agentId)) || TG_CHAT;
 }
@@ -199,6 +231,7 @@ function revokeToken(token) {
   const leaf = chain[chain.length - 1];
   revoked.add(leaf.tid);
   persistence.saveRevoked(leaf.tid);
+  persistence.audit("token_revoked", leaf.aud, leaf.tid, { cascades: true });
   return { revoked_tid: leaf.tid, cascades: true };
 }
 
@@ -234,6 +267,8 @@ const PRESETS = {
 
 // agent_id -> { day: "YYYY-MM-DD", spent: number }  (in-memory, resets daily)
 const dailySpend = new Map();
+const verdicts = new Map();
+const VERDICT_TTL_S = Number(process.env.VERDICT_TTL_S || 300);
 
 function guardCheck(body) {
   const agentId = String(body.agent_id || "anonymous");
@@ -308,6 +343,64 @@ function guardCheck(body) {
   };
 }
 
+function issueVerdict(agentId, amount, day) {
+  const id = crypto.randomBytes(16).toString("hex");
+  const issuedAt = new Date().toISOString();
+  const verdict = {
+    id,
+    agent_id: String(agentId),
+    amount: Number(amount || 0),
+    day,
+    status: "pending",
+    issued_at: issuedAt,
+    expires_at_ms: Date.now() + VERDICT_TTL_S * 1000,
+    consumed_at: null,
+  };
+  verdicts.set(id, verdict);
+  persistence.saveVerdict(verdict);
+  persistence.audit("verdict_issued", verdict.agent_id, id, {
+    amount: verdict.amount,
+    day: verdict.day,
+    expires_in_seconds: VERDICT_TTL_S,
+  });
+  setTimeout(() => expireVerdict(verdict), VERDICT_TTL_S * 1000 + 10).unref();
+  return { verdict_id: id, expires_in_seconds: VERDICT_TTL_S };
+}
+
+function expireVerdict(verdict) {
+  if (!verdict || verdict.status !== "pending" || Date.now() < verdict.expires_at_ms) return false;
+  verdict.status = "expired";
+  const today = new Date().toISOString().slice(0, 10);
+  let refunded = false;
+  if (verdict.day === today) {
+    const current = dailySpend.get(verdict.agent_id);
+    if (current && current.day === verdict.day) {
+      current.spent = Math.max(0, current.spent - verdict.amount);
+      dailySpend.set(verdict.agent_id, current);
+      persistence.saveSpend(verdict.agent_id, current.day, current.spent);
+      refunded = true;
+    }
+  }
+  persistence.updateVerdict(verdict);
+  persistence.audit("verdict_expired", verdict.agent_id, verdict.id, {
+    amount: verdict.amount,
+    day: verdict.day,
+    refunded,
+  });
+  return true;
+}
+
+function chargeApprovedVerdict(approval) {
+  const agentId = approval.request.agent_id;
+  const amount = approval.request.amount;
+  const day = new Date().toISOString().slice(0, 10);
+  const current = dailySpend.get(agentId);
+  const spent = current && current.day === day ? current.spent : 0;
+  dailySpend.set(agentId, { day, spent: spent + amount });
+  persistence.saveSpend(agentId, day, spent + amount);
+  return issueVerdict(agentId, amount, day);
+}
+
 // ---------------------------------------------------------------------------
 // Human-in-the-loop approvals (review verdicts -> Telegram, when configured)
 // ---------------------------------------------------------------------------
@@ -347,7 +440,14 @@ function resolveApproval(id, status) {
   a.status = status;
   a.resolved_at = new Date().toISOString();
   a.final_verdict = status === "approved" ? "allow" : "deny";
+  if (status === "approved" && a.bind_requested === true) {
+    a.execution_binding = chargeApprovedVerdict(a);
+  }
   persistence.updateApproval(a);
+  persistence.audit("approval_resolved", a.request.agent_id, id, {
+    status,
+    final_verdict: a.final_verdict,
+  });
   for (const wake of a.waiters) wake(a);
   a.waiters = [];
   return a;
@@ -382,9 +482,14 @@ async function requestApproval(body, verdict) {
     waiters: [],
     tg_message_id: null,
     tg_chat_id: chatForAgent(body.agent_id),
+    bind_requested: body.bind === true,
   };
   approvals.set(id, a);
   persistence.saveApproval(a);
+  persistence.audit("approval_created", a.request.agent_id, id, {
+    amount: a.request.amount,
+    destination: a.request.destination,
+  });
   armApprovalExpiry(id, APPROVAL_TIMEOUT_S * 1000);
 
   const lines = [
@@ -423,6 +528,7 @@ function approvalView(a) {
     request: a.request,
     created_at: a.created_at,
     resolved_at: a.resolved_at || null,
+    ...(a.execution_binding || {}),
   };
 }
 
@@ -442,6 +548,79 @@ function approvalView(a) {
 let x402Ready = false;      // true once resourceServer.initialize() succeeds
 let initX402 = null;        // invoked from app.listen()
 let paymentMiddleware;      // gates /paid/* (SDK when on, 503 when off)
+const verifiedPaymentPayers = new Map();
+
+function paymentKey(payload) {
+  return crypto.createHash("sha256").update(canonical(payload)).digest("hex");
+}
+
+function payerForRequest(req) {
+  try {
+    const encoded = req.get("payment-signature") || req.get("x-payment") || "";
+    const payload = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+    const found = verifiedPaymentPayers.get(paymentKey(payload));
+    return found && found.payer;
+  } catch {
+    return null;
+  }
+}
+
+function lifecycleRequest(context) {
+  const transport = context && context.transportContext;
+  const requestContext = transport && (transport.request || transport);
+  return requestContext && requestContext.adapter && requestContext.adapter.req;
+}
+
+function isClaimPath(req) {
+  return req && (req.path === "/paid/v1/agents/claim" || req.path === "/paid-okx/v1/agents/claim");
+}
+
+function installClaimPaymentHooks(resourceServer) {
+  resourceServer.onAfterVerify(async (context) => {
+    const key = paymentKey(context.paymentPayload);
+    verifiedPaymentPayers.set(key, {
+      payer: context.result && context.result.payer,
+      created_at: Date.now(),
+    });
+    if (verifiedPaymentPayers.size > 10000) {
+      verifiedPaymentPayers.delete(verifiedPaymentPayers.keys().next().value);
+    }
+  });
+  resourceServer.onAfterSettle(async (context) => {
+    verifiedPaymentPayers.delete(paymentKey(context.paymentPayload));
+    const req = lifecycleRequest(context);
+    if (!req || !req._claimTransaction) return;
+    const transaction = req._claimTransaction;
+    const payer = String((context.result && context.result.payer) || "");
+    if (!payer) throw new Error("settlement did not identify a payer wallet");
+    await persistence.commitClaim(transaction, payer);
+    if (!transaction.committed) return;
+    claimedAgents.set(transaction.agentId, {
+      agent_id: transaction.agentId,
+      secret_hash: transaction.secretHash,
+      claimed_at: transaction.claimedAt,
+      claimed_by: payer,
+      strict_mode: false,
+    });
+    persistence.audit("agent_claimed", transaction.agentId, transaction.agentId, {
+      claimed_by: payer,
+    });
+    req._claimTransaction = null;
+  });
+  const rollback = async (context) => {
+    if (context && context.paymentPayload) {
+      verifiedPaymentPayers.delete(paymentKey(context.paymentPayload));
+    }
+    const req = lifecycleRequest(context);
+    if (!req || !req._claimTransaction) return;
+    await persistence.rollbackClaim(req._claimTransaction);
+    req._claimTransaction = null;
+  };
+  resourceServer.onSettleFailure(rollback);
+  if (typeof resourceServer.onVerifiedPaymentCanceled === "function") {
+    resourceServer.onVerifiedPaymentCanceled(rollback);
+  }
+}
 
 if (PAYMENT_MODE === "okx-x402") {
   const { OKXFacilitatorClient } = require("@okxweb3/x402-core");
@@ -464,6 +643,7 @@ if (PAYMENT_MODE === "okx-x402") {
     X402.network,
     new ExactEvmScheme()
   );
+  installClaimPaymentHooks(resourceServer);
 
   const accepts = {
     scheme: "exact",
@@ -495,6 +675,11 @@ if (PAYMENT_MODE === "okx-x402") {
       description: "Claw-in-a-Box capability-token verification (POST JSON to this path)",
       mimeType: "application/json",
     },
+    "POST /paid/v1/agents/claim": {
+      accepts,
+      description: "Pay-to-Claim an agent_id and receive its one-time agent secret",
+      mimeType: "application/json",
+    },
     // v0.7.1: host-independent OKX-rail mirrors. The api host routes /paid/*
     // to the CDP layer, so the OKX listing endpoint moves to /paid-okx/* -
     // same handlers, same accepts (X Layer / USDT0), reachable on any host.
@@ -516,6 +701,11 @@ if (PAYMENT_MODE === "okx-x402") {
     "GET /paid-okx/v1/tokens/verify": {
       accepts,
       description: "Claw-in-a-Box capability-token verification (POST JSON to this path)",
+      mimeType: "application/json",
+    },
+    "POST /paid-okx/v1/agents/claim": {
+      accepts,
+      description: "Pay-to-Claim an agent_id and receive its one-time agent secret",
       mimeType: "application/json",
     },
   });
@@ -607,6 +797,7 @@ if (CDP_ENABLED) {
   const cdpResourceServer = new CdpResourceServerCtor(cdpFacilitatorClient)
     .register(CDP.network, new CdpExactEvmScheme());
   cdpResourceServer.registerExtension(bazaarResourceServerExtension);
+  installClaimPaymentHooks(cdpResourceServer);
 
   const cdpAccepts = {
     scheme: "exact",
@@ -698,6 +889,14 @@ if (CDP_ENABLED) {
       description: "Claw-in-a-Box capability-token verification (POST JSON to this path)",
       mimeType: "application/json",
     },
+    "POST /paid/v1/agents/claim": {
+      accepts: cdpAccepts,
+      description: "Pay-to-Claim an agent_id: settlement anchors the payer wallet and returns a one-time agent secret",
+      mimeType: "application/json",
+      serviceName: "Claw-in-a-Box",
+      iconUrl: process.env.SERVICE_ICON_URL || "https://clawinabox.xyz/logo-256-white.png",
+      tags: ["infra", "ai-agents", "identity", "pay-to-claim", "authorization"],
+    },
   });
 
   // Same defensive boot as the OKX layer: no eager sync (an unreachable
@@ -756,6 +955,13 @@ function sweep() {
   const now = Date.now();
   let freed = 0;
 
+  for (const [key, verified] of verifiedPaymentPayers) {
+    if (now - verified.created_at > 10 * 60 * 1000) {
+      verifiedPaymentPayers.delete(key);
+      freed++;
+    }
+  }
+
   // Resolved approvals are dead weight once the caller has read them.
   for (const [id, a] of approvals) {
     const done = a.status !== "pending";
@@ -767,6 +973,14 @@ function sweep() {
     }
   }
   persistence.purgeOldSpend(today);
+
+  for (const [id, verdict] of verdicts) {
+    expireVerdict(verdict);
+    if (verdict.status !== "pending" && now - new Date(verdict.issued_at).getTime() > APPROVAL_KEEP_MS) {
+      verdicts.delete(id);
+      freed++;
+    }
+  }
 
   // Bind codes are one-shot and short-lived; drop the expired ones.
   for (const [code, p] of pendingBinds) {
@@ -878,7 +1092,7 @@ app.use(express.json({ limit: "64kb", type: () => true }));
 app.use((req, res, next) => {
   res.set({
     "access-control-allow-origin": "*",
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-headers": "content-type, x-agent-secret, payment-signature, x-payment",
     "access-control-allow-methods": "GET, POST, OPTIONS",
   });
   if (req.method === "OPTIONS") return res.status(204).end();
@@ -895,6 +1109,18 @@ app.use((req, res, next) => {
 // gated on any host.
 const API_HOST = String(process.env.API_HOST || "api.clawinabox.xyz").toLowerCase();
 app.use((req, res, next) => {
+  if (isClaimPath(req)) {
+    if (!persistence.hardReady()) {
+      return res.status(503).json({
+        error: "feature_disabled",
+        detail: "Pay-to-Claim requires PERSISTENCE=on and a connected, hydrated database",
+      });
+    }
+    const agentId = String((req.body || {}).agent_id || "").trim();
+    if (agentId && claimedAgents.has(agentId)) {
+      return res.status(409).json({ error: "already_claimed", detail: "agent_id is already claimed" });
+    }
+  }
   if (String(req.hostname || "").toLowerCase() === API_HOST && CDP_ENABLED) {
     // ORDER MATTERS: "/paid-okx" also startsWith "/paid" - check it first,
     // otherwise the CDP middleware would pass it through UNPAID (it only
@@ -913,7 +1139,7 @@ app.get("/healthz", (req, res) => {
   res.json({
     ok: true,
     service: "claw-in-a-box",
-    version: "0.8.0",
+    version: "0.8.1",
     features: {
       telegram_hitl: TG_ENABLED,
       payment_mode: PAYMENT_MODE,
@@ -937,6 +1163,8 @@ app.get("/healthz", (req, res) => {
       approvals: approvals.size,
       settled: settled.size,
       bindings: operatorBindings.size,
+      claimed_agents: claimedAgents.size,
+      verdicts: verdicts.size,
       uptime_s: Math.round(process.uptime()),
     },
   });
@@ -994,36 +1222,51 @@ app.post("/v1/tokens/revoke", rateLimit, (req, res) => {
   res.json(revokeToken(need(req.body || {}, "token")));
 });
 
-async function guardCheckHandler(req, res) {
-  const b = req.body || {};
-  const verdict = guardCheck(b);
-  if (verdict.verdict !== "review" || !TG_ENABLED) {
-    return res.json(verdict);
+async function guardCheckHandler(req, res, next) {
+  try {
+    const input = req.body || {};
+    const requestedAgentId = String(input.agent_id || "anonymous");
+    const claimed = requireAgentSecret(req, requestedAgentId, { strictOnly: true });
+    const b = claimed && claimed.agent_id !== requestedAgentId
+      ? { ...input, agent_id: claimed.agent_id }
+      : input;
+    const agentId = String(b.agent_id || "anonymous");
+    const verdict = guardCheck(b);
+    if (verdict.verdict !== "review" || !TG_ENABLED) {
+      if (b.bind === true && verdict.verdict === "allow") {
+        const binding = issueVerdict(agentId, Number(b.amount || 0), new Date().toISOString().slice(0, 10));
+        return res.json({ ...verdict, ...binding });
+      }
+      return res.json(verdict);
+    }
+    // review + Telegram configured: open a human-in-the-loop approval
+    const a = await requestApproval(b, verdict);
+    const enriched = {
+      ...verdict,
+      approval_id: a.id,
+      approval_status: a.status,
+      poll: `/v1/approvals/${a.id}`,
+      note: `A human has been notified on Telegram. Poll the approval, or retry with "wait": true to block up to ${APPROVAL_TIMEOUT_S}s.`,
+    };
+    if (b.wait !== true) return res.json(enriched);
+    // long-poll: hold the request until resolved or timeout
+    const resolved = await new Promise((resolve) => {
+      a.waiters.push(resolve);
+    });
+    return res.json({
+      ...verdict,
+      verdict: resolved.final_verdict,
+      approval_id: a.id,
+      approval_status: resolved.status,
+      reasons: [...verdict.reasons,
+        resolved.status === "approved" ? "approved by human via Telegram"
+        : resolved.status === "denied" ? "denied by human via Telegram"
+        : `no human decision within ${APPROVAL_TIMEOUT_S}s — denied by default`],
+      ...(resolved.execution_binding || {}),
+    });
+  } catch (error) {
+    return next(error);
   }
-  // review + Telegram configured: open a human-in-the-loop approval
-  const a = await requestApproval(b, verdict);
-  const enriched = {
-    ...verdict,
-    approval_id: a.id,
-    approval_status: a.status,
-    poll: `/v1/approvals/${a.id}`,
-    note: `A human has been notified on Telegram. Poll the approval, or retry with "wait": true to block up to ${APPROVAL_TIMEOUT_S}s.`,
-  };
-  if (b.wait !== true) return res.json(enriched);
-  // long-poll: hold the request until resolved or timeout
-  const resolved = await new Promise((resolve) => {
-    a.waiters.push(resolve);
-  });
-  return res.json({
-    ...verdict,
-    verdict: resolved.final_verdict,
-    approval_id: a.id,
-    approval_status: resolved.status,
-    reasons: [...verdict.reasons,
-      resolved.status === "approved" ? "approved by human via Telegram"
-      : resolved.status === "denied" ? "denied by human via Telegram"
-      : `no human decision within ${APPROVAL_TIMEOUT_S}s — denied by default`],
-  });
 }
 
 app.post("/v1/guard/check", rateLimit, guardCheckHandler);
@@ -1032,6 +1275,29 @@ app.get("/v1/approvals/:id", (req, res) => {
   const a = approvals.get(req.params.id);
   if (!a) return res.status(404).json({ error: "not_found", detail: "unknown approval id" });
   res.json(approvalView(a));
+});
+
+app.post("/v1/verdicts/:id/consume", rateLimit, (req, res) => {
+  const verdict = verdicts.get(String(req.params.id));
+  if (!verdict) {
+    return res.status(404).json({ error: "not_found", detail: "unknown or expired verdict id" });
+  }
+  if (expireVerdict(verdict) || verdict.status === "expired") {
+    return res.status(404).json({ error: "not_found", detail: "unknown or expired verdict id" });
+  }
+  if (verdict.status === "consumed") {
+    return res.status(409).json({
+      error: "already_consumed",
+      consumed_at: verdict.consumed_at,
+    });
+  }
+  verdict.status = "consumed";
+  verdict.consumed_at = new Date().toISOString();
+  persistence.updateVerdict(verdict);
+  persistence.audit("verdict_consumed", verdict.agent_id, verdict.id, {
+    consumed_at: verdict.consumed_at,
+  });
+  return res.json({ verdict_id: verdict.id, status: "consumed", consumed_at: verdict.consumed_at });
 });
 
 // Telegram webhook: receives Approve/Deny button presses
@@ -1049,6 +1315,9 @@ app.post("/telegram/webhook", (req, res) => {
     if (pend && Date.now() - pend.created < BIND_TTL_MS) {
       operatorBindings.set(pend.agent_id, String(msg.chat.id));
       persistence.saveBinding(pend.agent_id, String(msg.chat.id));
+      persistence.audit("binding_changed", pend.agent_id, pend.agent_id, {
+        routing: "caller",
+      });
       pendingBinds.delete(code.toUpperCase());
       tg("sendMessage", {
         chat_id: msg.chat.id,
@@ -1092,6 +1361,42 @@ const paidRouteInfo = (req, res) => {
     usage: "POST JSON to this same path; request schema is documented at /skill.md",
   });
 };
+
+async function claimHandler(req, res, next) {
+  const agentId = String((req.body || {}).agent_id || "").trim();
+  if (!agentId) {
+    return res.status(400).json({ error: "missing_field", detail: "agent_id is required" });
+  }
+  if (agentId.length > 191) {
+    return res.status(400).json({ error: "invalid_agent_id", detail: "agent_id must be at most 191 characters" });
+  }
+  const payer = String(payerForRequest(req) || "");
+  if (!payer) {
+    return res.status(502).json({ error: "payer_unavailable", detail: "verified payment did not identify its payer wallet" });
+  }
+  const agentSecret = newAgentSecret();
+  const claimedAt = new Date().toISOString();
+  try {
+    const transaction = await persistence.beginClaim(agentId, secretHash(agentSecret), claimedAt);
+    req._claimTransaction = transaction;
+    res.once("close", () => {
+      if (req._claimTransaction) {
+        persistence.rollbackClaim(req._claimTransaction).finally(() => {
+          req._claimTransaction = null;
+        });
+      }
+    });
+    return res.status(201).json({
+      agent_id: agentId,
+      agent_secret: agentSecret,
+      claimed_at: claimedAt,
+      claimed_by: payer,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 app.post("/paid/v1/guard/check", guardCheckHandler);
 app.get("/paid/v1/guard/check", paidRouteInfo);
 app.post("/paid/v1/tokens/verify", (req, res) => {
@@ -1102,6 +1407,7 @@ app.post("/paid/v1/tokens/verify", (req, res) => {
   });
 });
 app.get("/paid/v1/tokens/verify", paidRouteInfo);
+app.post("/paid/v1/agents/claim", claimHandler);
 // v0.7.1 OKX-rail mirrors (payment enforced by the OKX SDK middleware above)
 app.post("/paid-okx/v1/guard/check", guardCheckHandler);
 app.get("/paid-okx/v1/guard/check", paidRouteInfo);
@@ -1113,6 +1419,33 @@ app.post("/paid-okx/v1/tokens/verify", (req, res) => {
   });
 });
 app.get("/paid-okx/v1/tokens/verify", paidRouteInfo);
+app.post("/paid-okx/v1/agents/claim", claimHandler);
+
+app.post("/v1/agents/rotate", rateLimit, async (req, res, next) => {
+  if (!persistence.hardReady()) {
+    return res.status(503).json({ error: "feature_disabled", detail: "secret rotation requires a connected, hydrated database" });
+  }
+  const agentId = String((req.body || {}).agent_id || "").trim();
+  if (!agentId) {
+    return res.status(400).json({ error: "missing_field", detail: "agent_id is required" });
+  }
+  const claimed = claimedAgents.get(agentId);
+  if (!claimed) return res.status(404).json({ error: "not_found", detail: "agent_id is not claimed" });
+  const presented = req.get("X-Agent-Secret") || "";
+  if (!secretsEqual(presented, claimed.secret_hash)) {
+    return res.status(403).json({ error: "forbidden", detail: "agent secret is invalid" });
+  }
+  const replacement = newAgentSecret();
+  const replacementHash = secretHash(replacement);
+  try {
+    await persistence.rotateAgent(agentId, claimed.secret_hash, replacementHash);
+    claimed.secret_hash = replacementHash;
+    claimedAgents.set(agentId, claimed);
+    return res.json({ agent_secret: replacement });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 // Multi-tenant: a caller registers to receive THEIR agent's review requests
 // on THEIR own Telegram. Returns a one-time code; the caller sends
@@ -1122,6 +1455,7 @@ app.post("/v1/operators/register", rateLimit, (req, res) => {
   if (!agentId) {
     return res.status(400).json({ error: "missing_field", detail: "agent_id is required" });
   }
+  requireAgentSecret(req, agentId);
   if (!TG_ENABLED) {
     return res.status(503).json({ error: "telegram_disabled", detail: "operator approval is not configured on this deployment" });
   }
@@ -1170,11 +1504,27 @@ function restoreApproval(id, row) {
   armApprovalExpiry(id, APPROVAL_TIMEOUT_S * 1000 - elapsed);
 }
 
+function restoreClaimedAgent(row) {
+  claimedAgents.set(String(row.agent_id), {
+    agent_id: String(row.agent_id),
+    secret_hash: String(row.secret_hash),
+    claimed_at: String(row.claimed_at),
+    claimed_by: row.claimed_by == null ? null : String(row.claimed_by),
+    strict_mode: Boolean(Number(row.strict_mode)),
+  });
+}
+
 app.listen(PORT, () => {
   console.log(`claw-in-a-box listening on :${PORT}`);
   if (initX402) initX402(); // x402 SDK sync must happen after the server is up
   if (initCdp) initCdp();   // ditto for the CDP layer (api host)
   persistence.init().then(() =>
-    persistence.hydrate({ revoked, dailySpend, operatorBindings, restoreApproval })
+    persistence.hydrate({
+      revoked,
+      dailySpend,
+      operatorBindings,
+      restoreApproval,
+      restoreClaimedAgent,
+    })
   );
 });

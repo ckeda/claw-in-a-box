@@ -5,6 +5,15 @@
 > pushed to this repository at the time. Development returned to this repo at
 > the v0.8.0 baseline. Dates are actual ship dates to production/staging.
 
+## v0.8.1 — "Locks" (unreleased staging candidate)
+- Pay-to-Claim (PTC): paid-only `POST /paid/v1/agents/claim` plus `/paid-okx` mirror, one-time 256-bit `agent_secret`, SHA-256-at-rest, and settlement payer recorded as `claimed_by`
+- Claimed identities authenticate future operator registration with `X-Agent-Secret`; rotation atomically replaces the stored hash and invalidates the old secret
+- Identity features fail closed: claim and rotate return `503 feature_disabled` unless `PERSISTENCE=on` has a connected, hydrated database
+- Optional strict enforcement requires the claimed agent's secret on free and paid guard checks without changing unclaimed/non-strict behavior
+- Optional `bind:true` issues a one-shot, five-minute `verdict_id`; consume is single-use, and unconsumed same-day verdicts expire with a spend-ledger refund
+- Append-only audit events for claims, bindings, approvals, verdict lifecycle and token revocation, with 100,000-row FIFO retention
+- Added v0.8.1 integration coverage alongside the original 38 checks, including both x402 rails and the restart-survival acceptance trio
+
 ## v0.8.0 — "Memory" (2026-07-16, staging)
 - MySQL persistence layer (`storage.js`): `PERSISTENCE=off|shadow|on`
 - `shadow`: memory remains runtime source of truth; all mutations fire-and-forget dual-written to DB

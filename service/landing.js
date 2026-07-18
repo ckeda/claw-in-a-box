@@ -249,6 +249,28 @@ POST /v1/tokens/revoke</pre>
     </div>
   </div>
 
+  <h2>Claim an agent id, keep the secret</h2>
+  <div class="layers">
+    <div class="layer">
+      <span class="who">Pay-to-Claim</span>
+      <span class="what"><b>One paid call anchors an agent id to the settlement wallet.</b>
+      Call <code>POST /paid/v1/agents/claim</code> (or the <code>/paid-okx</code>
+      mirror). The returned <code>agent_secret</code> is shown once; only its hash is stored.</span>
+    </div>
+    <div class="layer">
+      <span class="who">Authenticate</span>
+      <span class="what">Send the secret only in <code>X-Agent-Secret</code> when rotating
+      it or registering the claimed agent's Telegram operator. Strict agents also require
+      the header for guard checks on free and paid rails.</span>
+    </div>
+    <div class="layer">
+      <span class="who">Bind execution</span>
+      <span class="what">Add <code>"bind":true</code> to a guard call for a short-lived,
+      one-shot <code>verdict_id</code>, then consume it at
+      <code>POST /v1/verdicts/{id}/consume</code> before executing.</span>
+    </div>
+  </div>
+
   <h2 id="how">How to call it</h2>
   <ol class="steps">
     <li><b>Discover.</b> Point your agent at <code>/skill.md</code> — it describes every

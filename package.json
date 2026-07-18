@@ -1,6 +1,6 @@
 {
   "name": "claw-in-a-box-repository",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "Repository wrapper for the Claw-in-a-Box service and protocol integrations",
   "main": "service/server.js",

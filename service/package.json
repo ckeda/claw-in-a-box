@@ -1,11 +1,13 @@
 {
   "name": "claw-in-a-box",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Bounded authorization for AI agents - x402 pay-per-call (OKX + CDP/Bazaar) and Telegram HITL",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test-v2.js"
+    "test": "node test-all.js",
+    "test:legacy": "node test-v2.js",
+    "test:v081": "node test-v081.js"
   },
   "dependencies": {
     "express": "^4.21.2",

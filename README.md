@@ -19,9 +19,10 @@ Marketplace listings:
 - [ClawGuard on OKX.AI](https://www.okx.ai/agents/5854) — USDT0 on X Layer through the official OKX x402 SDK
 - [Claw-in-a-Box on Agentic.Market](https://agentic.market/services/api-clawinabox-xyz) — USDC on Base through the Coinbase/x402 Bazaar rail
 
-The repository baseline is v0.8.0 staging; the live mainnet service remains on
-its independently verified v0.7.5 deployment until the persistence rollout
-completes its staging, shadow, and observation gates.
+This branch is the v0.8.1 staging candidate. The live mainnet service remains
+on its independently verified release until the owner completes staging,
+shadow, verify-live, and observation gates; this repository state is not a
+claim that v0.8.1 has been promoted.
 
 ## What it does
 
@@ -71,6 +72,22 @@ v0.8.0 adds an optional MySQL layer with three rollout modes:
 Database failures degrade to in-memory operation and appear in `/healthz`;
 they do not block ordinary requests. Multi-replica coordination is not yet a
 guarantee because memory remains the runtime source of truth.
+
+### Pay-to-Claim identity and execution binding
+
+v0.8.1 adds a paid-only identity bootstrap. `POST /paid/v1/agents/claim`
+(or its `/paid-okx` mirror) settles $0.01, records the facilitator-verified
+payer wallet, and returns a 256-bit `agent_secret` exactly once. Only its
+SHA-256 hash is stored. Claimed agents must present `X-Agent-Secret` for
+operator registration and rotation; strict agents also require it on guard
+checks on both free and paid rails. Claim and rotation fail closed unless the
+database is connected in `PERSISTENCE=on` mode.
+
+Callers that need a decision bound to one execution send `"bind": true` to
+the guard. An allowed decision—or a review later approved by a human—returns a
+short-lived `verdict_id`, consumed once at `POST /v1/verdicts/:id/consume`.
+Unconsumed verdicts expire and refund their same-day ledger charge. Audit
+events persist the claim, binding, approval, verdict, and revocation lifecycle.
 
 ## Quickstart
 
@@ -126,7 +143,8 @@ service/
   landing.js          API landing page template
   status.js           status page and probes
   SKILL.md            agent-facing API documentation
-  test-v2.js          38-case baseline suite across six boot modes
+  test-v2.js          38-check baseline suite across six boot modes
+  test-v081.js        v0.8.1 security, payment, audit, and restart suite
   package.json        deployable service manifest
   package-lock.json   locked Node 18-compatible dependency graph
 plugins/nandatown/    NANDA auth plugin, validators, scenario, and tests
@@ -162,7 +180,7 @@ suite is necessary but never sufficient for mainnet promotion.
 
 ## Roadmap
 
-- **v0.8.1 — Locks:** Pay-to-Claim identity, strict mode, execution-bound verdicts, and audit events
+- **v0.8.1 — Locks:** staging candidate on this branch; owner review and staging verification pending
 - **v0.9.0 — Face:** static operator Console and authenticated read APIs
 - **v1.0.0 — Promise:** frozen `/v1` contract, public guarantees, and deprecation policy
 - **v1.1.0 — Probe:** trading-policy and MCP discovery experiments with written kill criteria
