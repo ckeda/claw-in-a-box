@@ -222,10 +222,12 @@ tbody tr:hover { background: #fffaf8; }
 .policy-card { position: relative; overflow: hidden; padding-top: 26px; display: flex; flex-direction: column; }
 .policy-index { position: absolute; top: 13px; right: 16px; color: #e5eaf0; font: 800 43px var(--display); }
 .policy-card h2 { font-size: 31px; text-transform: capitalize; position: relative; }
-.policy-card ul { list-style: none; padding: 0; margin: 23px 0; display: grid; gap: 13px; min-height: 173px; }
+.policy-card ul { list-style: none; padding: 0; margin: 23px 0; display: grid; grid-template-rows: repeat(3, 61px); gap: 13px; }
 .policy-card li { display: grid; gap: 5px; padding-bottom: 11px; border-bottom: 1px solid var(--line); }
 .policy-card li code { width: fit-content; color: var(--coral-dark); background: var(--coral-soft); border-radius: 4px; padding: 2px 5px; }
 .policy-card li span { color: #5d687b; font-size: 12.5px; }
+.policy-card li.policy-rule-empty code { color: #8c95a5; background: #f3f5f8; }
+.policy-card li.policy-rule-empty span { color: #a0a8b5; }
 .policy-card > .button { margin-top: auto; }
 .explain-strip { margin-top: 14px; display: flex; gap: 18px; align-items: center; justify-content: center; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, .72); color: var(--steel); font-size: 13px; }
 .explain-strip strong { color: var(--ink); }
@@ -311,7 +313,6 @@ tbody tr:hover { background: #fffaf8; }
   .market-links { grid-template-columns: repeat(3, 1fr); }
   .policy-grid { grid-template-columns: 1fr; }
   .policy-card:last-child { grid-column: auto; }
-  .policy-card ul { min-height: 0; }
   .form-row.three { grid-template-columns: 1fr; }
 }
 
