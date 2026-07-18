@@ -42,10 +42,16 @@ and `#policies` must work.
 - [ ] Public repository contains `console/` and this documentation
 - [ ] Live judge-testable static URL
 - [ ] Category: Developer Tools
-- [ ] README calls out how Codex accelerated the build
-- [ ] Run Codex `/feedback` and paste the exact core-build session ID
-- [ ] Confirm the exact model label shown by Codex before recording
+- [ ] Submission is described as “an operator console + security/persistence hardening I built with Codex for my already-live x402 service”
+- [ ] README and form state that v0.7.5 mainnet plus the v0.8.0 staging baseline are pre-existing infrastructure, not Build Week work
+- [ ] Only v0.8.1+ increments actually authored in the recorded session are claimed
+- [ ] README names where Codex accelerated implementation and where the owner made key product/security decisions
+- [ ] Run Codex `/feedback` in the Console core-build session and paste its exact session ID
+- [ ] Confirm `/feedback` covers the majority of the Console's core functionality, not only docs or polish
+- [ ] Cross-check the session timeline against the public history beginning with commit `12e479d`; resolve any contradiction before submitting
+- [ ] Confirm the exact GPT-5.6 model label shown by Codex before recording
 - [ ] Record the under-three-minute script in `DEMO-SCRIPT.md`
+- [ ] Video audio specifically names Codex-accelerated work, owner decisions, GPT-5.6, and the core-build session ID—never generic “built with AI” wording
 - [ ] Public YouTube URL works without sign-in
 
 ## Explicitly out of scope
