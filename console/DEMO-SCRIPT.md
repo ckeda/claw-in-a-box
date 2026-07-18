@@ -1,20 +1,22 @@
-# Claw Console — demo script (target: 2:40)
+# Claw Console — demo script (target: 2:55)
 
 Record at a desktop width with the owner ready to tap one fresh Telegram
 approval. Clear local Console data before recording, and keep the public repo
 open in a second tab.
 
-## 0:00–0:18 — The product
+## 0:00–0:22 — Scope and product
 
-> AI agents are starting to spend real money. Claw-in-a-Box is the bounded
-> authorization layer: your agent asks before it spends. This is Claw Console,
-> a public, browser-only workbench built against the live API—no mocked backend
-> and no privileged key.
+> Claw-in-a-Box was already my live x402 authorization service before this
+> event. My Developer Tools submission is Claw Console: an operator console,
+> plus the post-baseline security and persistence hardening I built with Codex
+> and GPT-5.6. The existing service is production infrastructure, not work I am
+> claiming for Build Week. The Console uses that real API—no mocked backend and
+> no privileged key.
 
 Show Dashboard. Point to version, both payment-rail readiness flags, heap, and
 the two marketplace links.
 
-## 0:18–0:58 — A real human approval
+## 0:22–1:02 — A real human approval
 
 Open Verdict Lab. Keep the generated `console-` agent ID, standard policy, and
 amount `150`.
@@ -30,7 +32,7 @@ Click **Get verdict**. The Console automatically opens Approvals.
 Show the Telegram message and tap **Approve**. Return to the timeline as it
 changes to `approved` and the final verdict becomes `allow`.
 
-## 0:58–1:52 — Authority that only shrinks
+## 1:02–1:56 — Authority that only shrinks
 
 Open Token Workbench and mint a root with `read, write, pay`. Delegate a child
 with only `read`, then delegate a grandchild. Verify the leaf.
@@ -44,7 +46,7 @@ Revoke the root and accept the confirmation.
 > One revocation kills the entire subtree. The Console re-verifies each held
 > descendant, and every node flips to `revoked_ancestor`.
 
-## 1:52–2:16 — Operator setup
+## 1:56–2:18 — Operator setup
 
 Briefly show Policies, then Telegram Binding.
 
@@ -52,16 +54,20 @@ Briefly show Policies, then Telegram Binding.
 > 15-minute code, send `/bind CODE` to the bot, and route future review requests
 > to their own phone.
 
-## 2:16–2:40 — How Codex built it
+## 2:18–2:55 — Where Codex accelerated the build
 
 Switch to the public repository and show `console/src/api.ts`,
 `console/src/token.ts`, and the tests.
 
-> I built this with Codex using the GPT-5.6 model selected for this session.
-> Codex converted the frozen API contract into a typed paid-route safety rail,
-> built the interactive delegation tree, matched the existing brand, and ran
-> the app through unit, static-build, live API, desktop, mobile, Node 18, and
-> Node 22 checks. The core-build session ID is [PASTE `/feedback` SESSION ID].
+> I used Codex with GPT-5.6 for the Console core build. Codex accelerated
+> translating the frozen API contract into a typed client, implementing the six
+> views and delegation tree, generating tests, and running static-build, live
+> API, desktop, mobile, Node 18, and Node 22 verification. I made the key
+> security decisions: this stays a static no-secret client, paid routes are
+> blocked by an exhaustive allowlist before fetch, decoded tokens remain
+> untrusted until server verification, and approval polling never becomes an
+> API hammer. The `/feedback` session covering that core work is [PASTE EXACT
+> CORE-BUILD SESSION ID].
 
 End on Dashboard:
 

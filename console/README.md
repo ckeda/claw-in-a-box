@@ -1,5 +1,14 @@
 # Claw Console
 
+**OpenAI Build Week category: Developer Tools.** The submission is the Console
+in this directory, plus only the v0.8.1+ security/persistence increments
+authored later in the same Codex + GPT-5.6 core-build session. The existing
+Claw-in-a-Box service line—v0.7.5 on mainnet and the v0.8.0 staging baseline—is
+the pre-existing backend and is not claimed as work built for this submission.
+
+The submission in one sentence: **an operator console + security/persistence
+hardening I built with Codex for my already-live x402 service.**
+
 Claw Console is the browser-only operator workbench for
 [Claw-in-a-Box](https://clawinabox.xyz), the human-approval layer for AI agent
 commerce. It turns the existing public authorization API into a visual,
@@ -86,9 +95,22 @@ Codex accelerated four parts of the core build:
    Node 22 verification passes, then converted the results into an operator
    handoff and demo script.
 
-The owner selected GPT-5.6 for the Build Week session. Before submission, copy
-the exact model label and core-build session ID displayed by Codex `/feedback`
-into the submission form; do not infer or invent either value.
+The owner made the product and security decisions that the Console would be a
+static, no-secret client; that its request adapter would use an exhaustive
+free-route allowlist and reject paid routes before `fetch`; that local token
+decoding would never be labelled verification; and that live polling would
+respect the API's timing and backoff boundaries. Codex + GPT-5.6 accelerated
+the implementation, test generation, browser verification, and documentation
+of those decisions.
+
+The owner selected GPT-5.6 for the Console core-build session. Before
+submission, run Codex `/feedback` **in that same session** and copy its exact
+session ID and model label into the submission form and demo script. That
+session must cover the majority of the six-view Console, typed API safety
+adapter, token-tree behavior, tests, and verification—not merely a later docs
+edit. Do not infer, invent, or substitute a different session ID. A judge must
+be able to reconcile that session with the public branch history beginning at
+the Console core-build commit (`12e479d`).
 
 ## Deployment boundary
 
