@@ -6,6 +6,9 @@
 > service line predates that session: its v0.7.5 mainnet deployment and v0.8.0
 > staging baseline are the existing x402 infrastructure the new work operates
 > on, and are not claimed as Build Week work.
+>
+> Codex `/feedback` core-build session:
+> `019f75a2-5efc-70e1-818e-2514176abc6a`.
 
 **Bounded authorization for AI agents.** Your agent is the claw — it can
 grab, spend, and act. Claw-in-a-Box is the box: it limits what the claw can

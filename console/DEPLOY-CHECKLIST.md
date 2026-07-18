@@ -46,9 +46,9 @@ and `#policies` must work.
 - [ ] README and form state that v0.7.5 mainnet plus the v0.8.0 staging baseline are pre-existing infrastructure, not Build Week work
 - [ ] Only v0.8.1+ increments actually authored in the recorded session are claimed
 - [ ] README names where Codex accelerated implementation and where the owner made key product/security decisions
-- [ ] Run Codex `/feedback` in the Console core-build session and paste its exact session ID
-- [ ] Confirm `/feedback` covers the majority of the Console's core functionality, not only docs or polish
-- [ ] Cross-check the session timeline against the public history beginning with commit `12e479d`; resolve any contradiction before submitting
+- [x] Codex `/feedback` core-build session recorded: `019f75a2-5efc-70e1-818e-2514176abc6a`
+- [x] Confirmed that session covers the majority of the Console's core functionality, not only docs or polish
+- [x] Cross-checked the session against the public history beginning with core-build commit `12e479d`
 - [ ] Confirm the exact GPT-5.6 model label shown by Codex before recording
 - [ ] Record the under-three-minute script in `DEMO-SCRIPT.md`
 - [ ] Video audio specifically names Codex-accelerated work, owner decisions, GPT-5.6, and the core-build session ID—never generic “built with AI” wording
