@@ -79,15 +79,20 @@ v0.8.1 adds a paid-only identity bootstrap. `POST /paid/v1/agents/claim`
 (or its `/paid-okx` mirror) settles $0.01, records the facilitator-verified
 payer wallet, and returns a 256-bit `agent_secret` exactly once. Only its
 SHA-256 hash is stored. Claimed agents must present `X-Agent-Secret` for
-operator registration and rotation; strict agents also require it on guard
-checks on both free and paid rails. Claim and rotation fail closed unless the
-database is connected in `PERSISTENCE=on` mode.
+operator registration, rotation, and `POST /v1/agents/strict`; strict agents
+also require it on guard checks on both free and paid rails. All three identity
+mutations fail closed unless the database is connected and hydrated in
+`PERSISTENCE=on` mode. The 201 claim response reports the verified payer
+provisionally; settlement payer is the durable `claimed_by` ground truth, with
+any mismatch surfaced through audit and `/healthz`.
 
 Callers that need a decision bound to one execution send `"bind": true` to
 the guard. An allowed decision—or a review later approved by a human—returns a
 short-lived `verdict_id`, consumed once at `POST /v1/verdicts/:id/consume`.
-Unconsumed verdicts expire and refund their same-day ledger charge. Audit
-events persist the claim, binding, approval, verdict, and revocation lifecycle.
+Pending verdicts survive a single-instance restart and re-arm their remaining
+expiry. Unconsumed verdicts expire and refund their same-day ledger charge,
+including expiry during downtime. Audit events persist the claim, binding,
+approval, verdict, mismatch, and revocation lifecycle.
 
 ## Quickstart
 

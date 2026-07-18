@@ -142,7 +142,12 @@ curl -s -X POST "$BASE/v1/verdicts/$VERDICT_ID/consume" -d '{}'
 The first consume returns 200; a second returns `409 already_consumed` with
 the first consumption time. Unknown or expired ids return 404. If a bound
 allow is not consumed before expiry, its same-day spend charge is refunded.
-Without `bind`, the v0.8 response shape is unchanged.
+Pending ids survive a single-instance restart with only their remaining
+expiry. Human approval is final for that request: an approved request is
+charged at resolution without re-evaluating machine limits, and may push the
+day over its cap by design; subsequent automated verdicts see the higher
+ledger total and tighten naturally. Without `bind`, the v0.8 response shape is
+unchanged.
 
 ### POST /v1/tokens — issue a root capability
 
@@ -227,8 +232,10 @@ cover the request before serving it.
   constraints (on the roadmap).
 - In `PERSISTENCE=on`, revocations, today's spend, bindings, pending
   approvals, claimed identities, verdict rows, and audit events are persisted.
-  Runtime verdict consumption is still memory-authoritative; do not assume a
-  multi-replica coordination guarantee.
+  Pending verdicts hydrate on restart and re-arm their remaining expiry; a
+  verdict that expired during downtime is refunded by the first boot sweep.
+  Runtime verdict consumption remains Map-authoritative, so this is a
+  single-instance restart guarantee, not multi-replica coordination.
 
 ## Pay-to-Claim identity
 
@@ -251,6 +258,12 @@ returns HTTP 201:
 }
 ```
 
+The `claimed_by` value serialized into the 201 response is the
+facilitator-verified payer and is provisional until settlement completes. The
+settlement payer is the durable on-chain ground truth. If the two differ, the
+claim remains valid, `claimed_by` is stored from settlement, and the service
+records `claim_payer_mismatch` in both audit history and `/healthz` counters.
+
 Store `agent_secret` immediately; only its SHA-256 hash is retained. A repeated
 claim returns `409 already_claimed` and is not settled. Rotate a secret with:
 
@@ -261,9 +274,19 @@ curl -s -X POST "$BASE/v1/agents/rotate" \
 ```
 
 Rotation atomically invalidates the old secret and returns the replacement
-once. Claim and rotation return `503 feature_disabled` unless the deployment
-is using a connected, hydrated MySQL database with `PERSISTENCE=on`. Never put
-the secret in a query string or JSON body.
+once. Toggle strict guard authentication with:
+
+```bash
+curl -s -X POST "$BASE/v1/agents/strict" \
+  -H "X-Agent-Secret: $AGENT_SECRET" \
+  -d '{"agent_id":"my-agent","strict":true}'
+```
+
+The response is `{"agent_id":"my-agent","strict_mode":true}`; send
+`"strict":false` to turn it off. Claim, rotation, and strict-mode changes
+return `503 feature_disabled` unless the deployment is using a connected,
+hydrated MySQL database with `PERSISTENCE=on`. Never put the secret in a query
+string or JSON body.
 
 
 ## Paid endpoints (x402 pay-per-call)

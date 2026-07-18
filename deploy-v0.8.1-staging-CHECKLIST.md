@@ -21,15 +21,17 @@ authorize a production deploy, merge, tag, or mainnet promotion.
 
 - [ ] Use a staging-only MySQL database and credentials. The startup migration
   creates `agents`, `verdicts`, and `events` while retaining the v0.8 tables.
-- [ ] Set `PERSISTENCE=on`. Pay-to-Claim and rotation intentionally return
-  `503 feature_disabled` in `off`, `shadow`, disconnected, or unhydrated state.
+- [ ] Set `PERSISTENCE=on`. Pay-to-Claim, rotation, and strict-mode changes
+  intentionally return `503 feature_disabled` in `off`, `shadow`,
+  disconnected, or unhydrated state.
 - [ ] Keep `VERDICT_TTL_S=300` (default) and `EVENT_LIMIT=100000` (default).
 - [ ] Keep the existing payment-rail, Telegram, database, and `GUARD_SECRET`
   values in the host-managed environment. Never copy them into the repo or zip.
 - [ ] Restart the staging service only. Do not change DNS, marketplace listings,
   production processes, or mainnet configuration.
 - [ ] Verify `GET /healthz`: version `0.8.1`, persistence mode `on`,
-  `db_connected=true`, `hydrated=true`, and the expected x402 rail(s) ready.
+  `db_connected=true`, `hydrated=true`, the expected x402 rail(s) ready, and
+  `counters.claim_payer_mismatch=0` before mismatch testing.
 
 ## 3. Pay-to-Claim and authentication
 
@@ -50,20 +52,19 @@ authorize a production deploy, merge, tag, or mainnet promotion.
 
 ## 4. Strict mode
 
-The design specifies strict behavior but does not define a public toggle
-endpoint/body. This candidate therefore persists and enforces the flag without
-inventing an HTTP contract. For the staging test, enable it directly:
-
-```sql
-UPDATE agents SET strict_mode = TRUE WHERE agent_id = '<staging-agent-id>';
-```
-
-- [ ] Restart staging so the strict flag hydrates.
+- [ ] Call `POST /v1/agents/strict` with
+  `{"agent_id":"<staging-agent-id>","strict":true}` and a wrong
+  `X-Agent-Secret`; expect 403.
+- [ ] Repeat with the current secret; expect 200 with
+  `{"agent_id":"<staging-agent-id>","strict_mode":true}`.
 - [ ] Free guard: missing/wrong/correct secret returns 403/403/200.
 - [ ] Paid guard: payment without the secret returns 403 and does not settle;
   the same request with the header reaches the normal verdict and settlement.
 - [ ] A different unclaimed/non-strict agent remains 200 and never receives an
   identity 403.
+- [ ] Toggle with `"strict":false`; expect `strict_mode:false` and confirm the
+  free guard is open again. Toggle it back on, restart staging, and confirm a
+  missing-secret guard still returns 403 (flag restart survival).
 
 ## 5. Execution binding and audit
 
@@ -75,22 +76,31 @@ UPDATE agents SET strict_mode = TRUE WHERE agent_id = '<staging-agent-id>';
 - [ ] Send a review with `"bind":true`, approve it in Telegram, and confirm the
   resolved approval carries a consumable verdict id. No id should be issued
   before approval.
+- [ ] While a review is pending, change that agent's spend ledger, then approve
+  it. Confirm the human approval remains final and charges without a second
+  machine-policy evaluation; subsequent automated verdicts use the new total.
 - [ ] Let a fresh bound allow expire unconsumed. Consume must return 404; a
   follow-up guard must show the same-day amount was refunded from the ledger.
-- [ ] Inspect `events` for all eight types:
+- [ ] If a test facilitator can return different verify and settlement payers,
+  confirm the paid claim succeeds, durable `claimed_by` equals settlement,
+  `/healthz.counters.claim_payer_mismatch` increments, and the event payload
+  records both addresses.
+- [ ] Inspect `events` for all nine types:
   `agent_claimed`, `binding_changed`, `approval_created`,
   `approval_resolved`, `verdict_issued`, `verdict_consumed`,
-  `verdict_expired`, and `token_revoked`.
+  `verdict_expired`, `token_revoked`, and `claim_payer_mismatch` (the mismatch
+  type appears only when that path is deliberately exercised).
 - [ ] Confirm event payloads contain no plaintext agent secret or environment
   credential. FIFO retention is covered by the local suite at a reduced cap.
 
 ## 6. Restart-survival acceptance gate
 
-Prepare all three states before one restart:
+Prepare all four states before one restart:
 
 1. mint and revoke a token, retaining the token for verification;
 2. allow a spend for a stable agent id and record `spent_today_after`;
-3. create a Telegram review and leave the approval pending.
+3. create a Telegram review and leave the approval pending;
+4. issue a `bind:true` allow, retaining its unconsumed `verdict_id`.
 
 - [ ] Restart staging once.
 - [ ] The revoked token still returns `403 revoked_ancestor`.
@@ -98,15 +108,20 @@ Prepare all three states before one restart:
   daily total rather than zero.
 - [ ] `GET /v1/approvals/{id}` returns the same pending approval, whose expiry
   timer resumes with only its remaining time.
+- [ ] Consume the pre-restart `verdict_id`; it returns 200 and cannot be
+  consumed a second time.
+- [ ] Separately allow another bound verdict to expire during downtime. On the
+  next boot, the first sweep marks it expired, consume returns 404, and its
+  same-day spend charge is refunded.
 
-All three must pass together. Any failure blocks owner acceptance.
+All four primary states must pass together. Any failure blocks owner acceptance.
 
 ## 7. Rollback and checkpoint
 
 - [ ] On failure, restore the previous staging directory and environment, then
   restart staging. The new tables may remain unused. Preserve any claimed rows
   for investigation; do not silently discard identities after a paid claim.
-- [ ] Attach health output, test logs, payment receipts, restart-trio evidence,
+- [ ] Attach health output, test logs, payment receipts, restart-quad evidence,
   and sanitized audit queries to the draft PR.
 - [ ] Stop. The owner performs the independent v0.8.1 review. Do not merge,
   deploy mainnet, tag a release, or begin v0.9.0.

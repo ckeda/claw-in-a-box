@@ -193,8 +193,9 @@ function init() {
 }
 
 // targets: revoked, dailySpend, operatorBindings, restoreApproval,
-// restoreClaimedAgent. Hydration is all-or-nothing from the security layer's
-// point of view: state.hydrated only flips after the agent rows are loaded.
+// restoreVerdict, restoreClaimedAgent. Hydration is all-or-nothing from the
+// security layer's point of view: state.hydrated only flips after every
+// restart-sensitive row has been loaded.
 async function hydrate(targets) {
   hydrateTargets = targets;
   if (MODE !== "on" || !pool || !state.db_connected) return;
@@ -219,6 +220,10 @@ async function hydrate(targets) {
       const payload = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
       targets.restoreApproval(row.id, payload);
     }
+    const [pendingVerdicts] = await pool.query(
+      "SELECT id, agent_id, amount, day, status, issued_at, consumed_at FROM verdicts WHERE status = 'pending'"
+    );
+    for (const row of pendingVerdicts) targets.restoreVerdict(row);
     const [agents] = await pool.query(
       "SELECT agent_id, secret_hash, claimed_at, claimed_by, strict_mode FROM agents"
     );
@@ -226,7 +231,8 @@ async function hydrate(targets) {
     state.hydrated = true;
     console.log(
       `[persistence] hydrated: revoked=${rev.length} spend=${spend.length} ` +
-      `bindings=${bindings.length} pending_approvals=${pending.length} agents=${agents.length}`
+      `bindings=${bindings.length} pending_approvals=${pending.length} ` +
+      `pending_verdicts=${pendingVerdicts.length} agents=${agents.length}`
     );
   } catch (error) {
     markDisconnected(error);
@@ -306,6 +312,27 @@ async function rotateAgent(agentId, oldHash, newHash) {
   }
 }
 
+async function setStrictMode(agentId, secretHash, strictMode) {
+  requireHardReady();
+  try {
+    const [result] = await pool.execute(
+      "UPDATE agents SET strict_mode=? WHERE agent_id=? AND secret_hash=?",
+      [strictMode, agentId, secretHash]
+    );
+    if (Number(result.affectedRows) !== 1) {
+      const error = new Error("agent secret is invalid or was already rotated");
+      error.code = "forbidden";
+      error.status = 403;
+      throw error;
+    }
+    state.writes_ok++;
+  } catch (error) {
+    if (error.status === 403) throw error;
+    markDisconnected(error);
+    throw featureDisabled();
+  }
+}
+
 const approvalRow = (approval) => {
   const { waiters, ...rest } = approval;
   return rest;
@@ -320,6 +347,7 @@ module.exports = {
   commitClaim,
   rollbackClaim,
   rotateAgent,
+  setStrictMode,
   audit,
   saveRevoked: (tid) => fire("INSERT IGNORE INTO revoked_tokens (tid) VALUES (?)", [tid]),
   saveSpend: (agentId, day, spent) => fire(

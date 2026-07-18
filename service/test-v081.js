@@ -92,6 +92,7 @@ const paymentHeader = (accepts) => ({
 function startFacilitator(port) {
   const hits = { verify: 0, settle: 0 };
   const payer = "0x3333333333333333333333333333333333333333";
+  let settlementPayer = payer;
   const server = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     if (req.url.startsWith("/api/v6/pay/x402/supported")) {
@@ -111,14 +112,19 @@ function startFacilitator(port) {
         transaction: `0x${"ef".repeat(32)}`,
         network: "eip155:196",
         amount: "10000",
-        payer,
+        payer: settlementPayer,
       } }));
     }
     res.statusCode = 404;
     res.end("{}");
   });
   server.listen(port);
-  return { server, hits, payer };
+  return {
+    server,
+    hits,
+    payer,
+    setSettlementPayer(value) { settlementPayer = value; },
+  };
 }
 
 function dbEnv(dbFile, facilitatorPort, extra = {}) {
@@ -193,6 +199,26 @@ async function main() {
       JSON.stringify(raceStatuses) === JSON.stringify([201, 409]));
     ok("concurrent first-claim race settles exactly once", facilitator.hits.settle === beforeRaceSettle + 1);
 
+    const settlementPayer = "0x5555555555555555555555555555555555555555";
+    facilitator.setSettlementPayer(settlementPayer);
+    const mismatchChallenge = await challenge(8831, "/paid/v1/agents/claim");
+    response = await post(8831, "/paid/v1/agents/claim", { agent_id: "payer-mismatch" },
+      paymentHeader(mismatchChallenge.envelope.accepts[0]));
+    const mismatchClaim = await response.json();
+    facilitator.setSettlementPayer(facilitator.payer);
+    ok("payer mismatch keeps the paid claim and returns provisional verified payer",
+      response.status === 201 && mismatchClaim.claimed_by === facilitator.payer);
+    await delay(100);
+    const mismatchHealth = await (await fetch("http://127.0.0.1:8831/healthz")).json();
+    ok("payer mismatch increments healthz counter", mismatchHealth.counters?.claim_payer_mismatch === 1);
+    const mismatchPersisted = JSON.parse(fs.readFileSync(dbFile, "utf8"));
+    ok("settlement payer is durable claimed_by ground truth",
+      mismatchPersisted.agents["payer-mismatch"]?.claimed_by === settlementPayer);
+    const mismatchEvent = mismatchPersisted.events.find((event) => event.type === "claim_payer_mismatch");
+    ok("payer mismatch audit records both addresses",
+      mismatchEvent?.payload?.verified_payer === facilitator.payer &&
+      mismatchEvent?.payload?.settlement_payer === settlementPayer);
+
     response = await post(8831, "/v1/operators/register", { agent_id: "alpha" });
     ok("claimed register rejects missing secret", response.status === 403);
     response = await post(8831, "/v1/operators/register", { agent_id: "alpha" }, { "X-Agent-Secret": "wrong" });
@@ -219,6 +245,21 @@ async function main() {
     response = await post(8831, "/v1/operators/register", { agent_id: "alpha" }, { "X-Agent-Secret": rotatedSecret });
     ok("rotated new secret is valid", response.status === 200);
     ok("secret validation uses timingSafeEqual", fs.readFileSync(path.join(__dirname, "server.js"), "utf8").includes("crypto.timingSafeEqual"));
+
+    response = await post(8831, "/v1/agents/strict", { agent_id: "alpha", strict: true }, { "X-Agent-Secret": "wrong" });
+    ok("strict toggle rejects wrong secret", response.status === 403);
+    response = await post(8831, "/v1/agents/strict", { agent_id: "alpha", strict: true }, { "X-Agent-Secret": rotatedSecret });
+    const strictOn = await response.json();
+    ok("strict toggle turns enforcement on", response.status === 200 && strictOn.agent_id === "alpha" && strictOn.strict_mode === true);
+    response = await post(8831, "/v1/guard/check", { agent_id: "alpha", amount: 1 });
+    ok("strict-on guard requires the secret immediately", response.status === 403);
+    response = await post(8831, "/v1/agents/strict", { agent_id: "alpha", strict: false }, { "X-Agent-Secret": rotatedSecret });
+    const strictOff = await response.json();
+    ok("strict toggle turns enforcement off", response.status === 200 && strictOff.strict_mode === false);
+    response = await post(8831, "/v1/guard/check", { agent_id: "alpha", amount: 1 });
+    ok("strict-off guard restores open behavior", response.status === 200);
+    response = await post(8831, "/v1/agents/strict", { agent_id: "alpha", strict: true }, { "X-Agent-Secret": rotatedSecret });
+    ok("strict flag is enabled for restart-survival gate", response.status === 200 && (await response.json()).strict_mode === true);
 
     response = await post(8831, "/v1/guard/check", { agent_id: "snapshot", amount: 30 });
     const noBind = await response.json();
@@ -249,6 +290,10 @@ async function main() {
     response = await post(8831, "/v1/guard/check", { agent_id: "bound-review", amount: 150, bind: true });
     const boundReview = await response.json();
     ok("bind:true review waits for human without an early verdict id", boundReview.verdict === "review" && Boolean(boundReview.approval_id) && !("verdict_id" in boundReview));
+    response = await post(8831, "/v1/guard/check", {
+      agent_id: "bound-review", amount: 900, policy: { name: "owner-approved", rules: [] },
+    });
+    ok("spend can change while a human decision is pending", response.status === 200 && (await response.json()).spent_today_after === 900);
     await post(8831, "/telegram/webhook", {
       callback_query: { id: "bound-review-cq", data: `approve:${boundReview.approval_id}` },
     });
@@ -257,6 +302,11 @@ async function main() {
     ok("review -> approved issues execution binding", approvedBoundReview.status === "approved" && Boolean(approvedBoundReview.verdict_id));
     response = await post(8831, `/v1/verdicts/${approvedBoundReview.verdict_id}/consume`, {});
     ok("approved review verdict consumes", response.status === 200);
+    response = await post(8831, "/v1/guard/check", { agent_id: "bound-review", amount: 1 });
+    const afterFinalApproval = await response.json();
+    ok("human approval is final even when its charge pushes the day over cap",
+      afterFinalApproval.verdict === "deny" && afterFinalApproval.spent_today_after === 1050,
+      `verdict=${afterFinalApproval.verdict} spent=${afterFinalApproval.spent_today_after}`);
 
     response = await post(8831, "/v1/guard/check", { agent_id: "audit-review", amount: 150 });
     const review = await response.json();
@@ -281,18 +331,11 @@ async function main() {
     await stop(server);
   }
 
-  // Strict is intentionally an operator-managed persisted bit in v0.8.1;
-  // the design does not define a public toggle endpoint. Seed it exactly as a
-  // staging operator would, then verify hydration and enforcement.
-  const persisted = JSON.parse(fs.readFileSync(dbFile, "utf8"));
-  persisted.agents.alpha.strict_mode = 1;
-  fs.writeFileSync(dbFile, JSON.stringify(persisted));
-
   server = boot(env, 8831);
   await waitReady(8831, true);
   try {
     let response = await post(8831, "/v1/guard/check", { agent_id: "alpha", amount: 1 });
-    ok("strict claimed guard rejects missing secret", response.status === 403);
+    ok("strict flag survives restart and rejects missing secret", response.status === 403);
     response = await post(8831, "/v1/guard/check", { agent_id: "alpha", amount: 1 }, { "X-Agent-Secret": rotatedSecret });
     ok("strict claimed guard accepts current secret", response.status === 200);
     response = await post(8831, "/v1/guard/check", { agent_id: " alpha ", amount: 1 });
@@ -326,7 +369,11 @@ async function main() {
   for (const type of [
     "agent_claimed", "binding_changed", "approval_created", "approval_resolved",
     "verdict_issued", "verdict_consumed", "verdict_expired", "token_revoked",
+    "claim_payer_mismatch",
   ]) ok(`audit records ${type}`, auditTypes.has(type));
+  ok("strict flips use binding_changed with explicit payload",
+    auditDb.events.some((event) => event.type === "binding_changed" &&
+      event.payload?.change === "strict_mode" && event.payload?.strict_mode === true));
 
   // The API host's primary CDP/Base rail must carry the same claim contract.
   const cdpPayer = "0x4444444444444444444444444444444444444444";
@@ -372,6 +419,56 @@ async function main() {
     cdpFacilitator.close();
   }
 
+  // Pending execution bindings hydrate across restart. A verdict that expires
+  // during downtime is restored first, then refunded by the boot sweep.
+  const verdictRestartDb = path.join(temp, "verdict-restart.json");
+  const verdictRestartEnv = {
+    ...dbEnv(verdictRestartDb, 9921),
+    PAYMENT_MODE: "off",
+    TELEGRAM_BOT_TOKEN: "",
+    TELEGRAM_CHAT_ID: "",
+    VERDICT_TTL_S: "10",
+  };
+  let restartVerdictId;
+  server = boot(verdictRestartEnv, 8837);
+  await waitReady(8837, true);
+  try {
+    const response = await post(8837, "/v1/guard/check", { agent_id: "restart-verdict", amount: 30, bind: true });
+    restartVerdictId = (await response.json()).verdict_id;
+    ok("restart gate prepares a pending execution verdict", response.status === 200 && Boolean(restartVerdictId));
+    await delay(100);
+  } finally { await stop(server); }
+
+  server = boot(verdictRestartEnv, 8837);
+  await waitReady(8837, true);
+  try {
+    const response = await post(8837, `/v1/verdicts/${restartVerdictId}/consume`, {});
+    ok("restart gate: pending verdict survives restart and remains consumable", response.status === 200);
+  } finally { await stop(server); }
+
+  let downtimeVerdictId;
+  server = boot(verdictRestartEnv, 8837);
+  await waitReady(8837, true);
+  try {
+    const response = await post(8837, "/v1/guard/check", { agent_id: "downtime-refund", amount: 40, bind: true });
+    downtimeVerdictId = (await response.json()).verdict_id;
+    await delay(100);
+  } finally { await stop(server); }
+  const verdictRestartRows = JSON.parse(fs.readFileSync(verdictRestartDb, "utf8"));
+  verdictRestartRows.verdicts[downtimeVerdictId].issued_at = new Date(Date.now() - 20000).toISOString();
+  fs.writeFileSync(verdictRestartDb, JSON.stringify(verdictRestartRows));
+
+  server = boot(verdictRestartEnv, 8837);
+  await waitReady(8837, true);
+  try {
+    let response = await post(8837, `/v1/verdicts/${downtimeVerdictId}/consume`, {});
+    ok("verdict expired during downtime is unavailable after first boot sweep", response.status === 404);
+    response = await post(8837, "/v1/guard/check", { agent_id: "downtime-refund", amount: 1 });
+    const afterDowntimeRefund = await response.json();
+    ok("first boot sweep refunds a same-day verdict that expired during downtime",
+      afterDowntimeRefund.spent_today_after === 1, `spent=${afterDowntimeRefund.spent_today_after}`);
+  } finally { await stop(server); }
+
   // Hard DB endpoints fail closed while ordinary routes retain v0.8 behavior.
   const offDb = path.join(temp, "off.json");
   server = boot({ ...env, PAYMENT_MODE: "off", PERSISTENCE: "off", CLAW_TEST_DB_FILE: offDb }, 8832);
@@ -381,6 +478,8 @@ async function main() {
     ok("PERSISTENCE=off claim fails closed", response.status === 503 && (await response.json()).error === "feature_disabled");
     response = await post(8832, "/v1/agents/rotate", { agent_id: "off" });
     ok("PERSISTENCE=off rotate fails closed", response.status === 503);
+    response = await post(8832, "/v1/agents/strict", { agent_id: "off", strict: true });
+    ok("PERSISTENCE=off strict toggle fails closed", response.status === 503);
     response = await post(8832, "/v1/guard/check", { agent_id: "off", amount: 1 });
     ok("PERSISTENCE=off leaves ordinary guard available", response.status === 200);
   } finally { await stop(server); }
@@ -393,6 +492,8 @@ async function main() {
     ok("dead DB claim fails closed", response.status === 503);
     response = await post(8833, "/v1/agents/rotate", { agent_id: "dead" });
     ok("dead DB rotate fails closed", response.status === 503);
+    response = await post(8833, "/v1/agents/strict", { agent_id: "dead", strict: true });
+    ok("dead DB strict toggle fails closed", response.status === 503);
     response = await post(8833, "/v1/tokens", { subject: "still-live", scopes: ["read"] });
     ok("dead DB leaves non-security endpoints available", response.status === 200);
   } finally { await stop(server); }

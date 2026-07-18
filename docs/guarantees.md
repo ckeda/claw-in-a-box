@@ -32,8 +32,8 @@ secret, TLS in front, callers routed through it):
 | a token is only accepted from its bound audience | `verify` with `presenter` set (callers should always set it) |
 | per-tx / daily / allowlist / time-window verdicts are deterministic | pure rule evaluation; `deny` dominates `review` dominates `allow` |
 | a claimed agent id cannot be rebound without its secret | paid claim inserts a unique database row; only a SHA-256 secret hash is stored and compared with `timingSafeEqual` |
-| the payment wallet anchors a claim | `claimed_by` comes from the facilitator's verified/settled payer, not a request body field |
-| a bound verdict cannot be consumed twice by this service | one-shot in-memory state transition; the second consume returns `409 already_consumed` |
+| the payment wallet anchors a claim | settlement payer is durable `claimed_by`; a verify/settle mismatch preserves the paid claim and emits audit plus health telemetry |
+| a bound verdict cannot be consumed twice by this service | one-shot runtime state transition, hydrated when pending after restart; the second consume returns `409 already_consumed` |
 | an abandoned bound verdict does not permanently poison same-day budget | unconsumed expiry marks the verdict expired and refunds its same-day ledger charge |
 
 ## Three enforcement surfaces in this release
@@ -62,11 +62,13 @@ and submit a transaction directly.
 - **Persistence has an explicit mode boundary.** In `off` and `shadow`, memory
   remains runtime truth and restart guarantees do not apply. In `on`, the
   service hydrates revocations, today's spend, bindings, pending approvals,
-  and claimed identities. Claim and rotation fail closed with 503 unless that
-  database is connected and hydrated; they never fall back to memory.
-- **Verdict consume state is process-local.** Verdict rows are audit-persisted,
-  but the v0.8.1 consume decision follows the runtime Map by design. Do not run
-  multiple active replicas and claim global exactly-once execution.
+  pending verdicts, and claimed identities. Claim, rotation, and strict-mode
+  changes fail closed with 503 unless that database is connected and hydrated;
+  they never fall back to memory.
+- **Verdict consume state is single-instance.** Pending verdicts hydrate and
+  re-arm expiry after restart, but the live consume decision follows the
+  runtime Map by design. Do not run multiple active replicas and claim global
+  exactly-once execution.
 - **No confidentiality.** Tokens are signed, not encrypted; scopes and
   audiences are readable by anyone holding the token. Treat tokens as
   bearer credentials and transport them over TLS only.

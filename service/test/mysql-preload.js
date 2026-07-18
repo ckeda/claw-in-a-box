@@ -91,7 +91,7 @@ function execute(target, sql, params = []) {
   }
   if (q.startsWith("update agents set strict_mode")) {
     const row = target.agents[params[1]];
-    if (!row) return [{ affectedRows: 0 }, []];
+    if (!row || (params.length > 2 && row.secret_hash !== params[2])) return [{ affectedRows: 0 }, []];
     row.strict_mode = params[0] ? 1 : 0;
     return [{ affectedRows: 1 }, []];
   }
@@ -139,6 +139,9 @@ function query(target, sql, params = []) {
   if (q === "select agent_id, chat_id from operator_bindings") return [Object.values(target.operator_bindings), []];
   if (q.startsWith("select id, payload from approvals")) {
     return [Object.values(target.approvals).filter((row) => row.status === "pending"), []];
+  }
+  if (q.startsWith("select id, agent_id, amount, day, status, issued_at, consumed_at from verdicts")) {
+    return [Object.values(target.verdicts).filter((row) => row.status === "pending"), []];
   }
   if (q.startsWith("select agent_id, secret_hash")) return [Object.values(target.agents), []];
   return execute(target, sql, params);

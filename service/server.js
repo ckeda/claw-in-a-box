@@ -36,6 +36,9 @@ const BIND_TTL_MS = 15 * 60 * 1000; // a bind code is valid for 15 minutes
 // hard-DB feature is marked ready. Secrets never enter this map in plaintext.
 // agent_id -> { secret_hash, claimed_at, claimed_by, strict_mode }
 const claimedAgents = new Map();
+const healthCounters = {
+  claim_payer_mismatch: 0,
+};
 
 const secretHash = (secret) =>
   crypto.createHash("sha256").update(String(secret), "utf8").digest("hex");
@@ -48,6 +51,15 @@ function secretsEqual(presented, expectedHash) {
   const candidate = Buffer.from(secretHash(presented), "hex");
   const expected = Buffer.from(String(expectedHash || ""), "hex");
   return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
+}
+
+function payersEqual(verifiedPayer, settlementPayer) {
+  const verified = String(verifiedPayer || "").trim();
+  const settledPayer = String(settlementPayer || "").trim();
+  if (verified.startsWith("0x") && settledPayer.startsWith("0x")) {
+    return verified.toLowerCase() === settledPayer.toLowerCase();
+  }
+  return verified === settledPayer;
 }
 
 function requireAgentSecret(req, agentId, { strictOnly = false } = {}) {
@@ -363,8 +375,14 @@ function issueVerdict(agentId, amount, day) {
     day: verdict.day,
     expires_in_seconds: VERDICT_TTL_S,
   });
-  setTimeout(() => expireVerdict(verdict), VERDICT_TTL_S * 1000 + 10).unref();
+  armVerdictExpiry(verdict);
   return { verdict_id: id, expires_in_seconds: VERDICT_TTL_S };
+}
+
+function armVerdictExpiry(verdict) {
+  const remainingMs = verdict.expires_at_ms - Date.now();
+  if (remainingMs <= 0) return;
+  setTimeout(() => expireVerdict(verdict), remainingMs + 10).unref();
 }
 
 function expireVerdict(verdict) {
@@ -605,6 +623,13 @@ function installClaimPaymentHooks(resourceServer) {
     persistence.audit("agent_claimed", transaction.agentId, transaction.agentId, {
       claimed_by: payer,
     });
+    if (!payersEqual(transaction.verifiedPayer, payer)) {
+      healthCounters.claim_payer_mismatch++;
+      persistence.audit("claim_payer_mismatch", transaction.agentId, transaction.agentId, {
+        verified_payer: transaction.verifiedPayer || null,
+        settlement_payer: payer,
+      });
+    }
     req._claimTransaction = null;
   });
   const rollback = async (context) => {
@@ -1167,6 +1192,7 @@ app.get("/healthz", (req, res) => {
       verdicts: verdicts.size,
       uptime_s: Math.round(process.uptime()),
     },
+    counters: healthCounters,
   });
 });
 
@@ -1378,6 +1404,7 @@ async function claimHandler(req, res, next) {
   const claimedAt = new Date().toISOString();
   try {
     const transaction = await persistence.beginClaim(agentId, secretHash(agentSecret), claimedAt);
+    transaction.verifiedPayer = payer;
     req._claimTransaction = transaction;
     res.once("close", () => {
       if (req._claimTransaction) {
@@ -1447,6 +1474,40 @@ app.post("/v1/agents/rotate", rateLimit, async (req, res, next) => {
   }
 });
 
+app.post("/v1/agents/strict", rateLimit, async (req, res, next) => {
+  if (!persistence.hardReady()) {
+    return res.status(503).json({ error: "feature_disabled", detail: "strict mode requires a connected, hydrated database" });
+  }
+  const body = req.body || {};
+  const agentId = String(body.agent_id || "").trim();
+  if (!agentId) {
+    return res.status(400).json({ error: "missing_field", detail: "agent_id is required" });
+  }
+  if (typeof body.strict !== "boolean") {
+    return res.status(400).json({ error: "invalid_field", detail: "strict must be true or false" });
+  }
+  const claimed = claimedAgents.get(agentId);
+  if (!claimed) return res.status(404).json({ error: "not_found", detail: "agent_id is not claimed" });
+  const presented = req.get("X-Agent-Secret") || "";
+  if (!secretsEqual(presented, claimed.secret_hash)) {
+    return res.status(403).json({ error: "forbidden", detail: "agent secret is invalid" });
+  }
+  const previousStrictMode = claimed.strict_mode;
+  try {
+    await persistence.setStrictMode(agentId, claimed.secret_hash, body.strict);
+    claimed.strict_mode = body.strict;
+    claimedAgents.set(agentId, claimed);
+    persistence.audit("binding_changed", agentId, agentId, {
+      change: "strict_mode",
+      previous_strict_mode: previousStrictMode,
+      strict_mode: body.strict,
+    });
+    return res.json({ agent_id: agentId, strict_mode: body.strict });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 // Multi-tenant: a caller registers to receive THEIR agent's review requests
 // on THEIR own Telegram. Returns a one-time code; the caller sends
 // "/bind CODE" to the bot to complete the link.
@@ -1504,6 +1565,22 @@ function restoreApproval(id, row) {
   armApprovalExpiry(id, APPROVAL_TIMEOUT_S * 1000 - elapsed);
 }
 
+function restoreVerdict(row) {
+  const issuedAtMs = new Date(row.issued_at).getTime();
+  const verdict = {
+    id: String(row.id),
+    agent_id: String(row.agent_id),
+    amount: Number(row.amount),
+    day: String(row.day),
+    status: "pending",
+    issued_at: String(row.issued_at),
+    expires_at_ms: Number.isFinite(issuedAtMs) ? issuedAtMs + VERDICT_TTL_S * 1000 : 0,
+    consumed_at: null,
+  };
+  verdicts.set(verdict.id, verdict);
+  armVerdictExpiry(verdict);
+}
+
 function restoreClaimedAgent(row) {
   claimedAgents.set(String(row.agent_id), {
     agent_id: String(row.agent_id),
@@ -1524,7 +1601,8 @@ app.listen(PORT, () => {
       dailySpend,
       operatorBindings,
       restoreApproval,
+      restoreVerdict,
       restoreClaimedAgent,
     })
-  );
+  ).then(() => sweep());
 });
