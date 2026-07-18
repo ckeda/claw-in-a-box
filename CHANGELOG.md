@@ -5,6 +5,14 @@
 > pushed to this repository at the time. Development returned to this repo at
 > the v0.8.0 baseline. Dates are actual ship dates to production/staging.
 
+## Unreleased — Claw Console (OpenAI Build Week)
+- Static browser-only operator workbench in `console/`
+- Live Dashboard, Verdict Lab, Approval timeline, Token Workbench, Telegram binding helper and policy cards
+- Client-side free-endpoint allowlist blocks paid and unknown routes before `fetch`
+- Polite health/approval/binding polling with explicit `429` backoff
+- Bounded localStorage history and token state; no accounts or server-side keys
+- Responsive Claw-in-a-Box design system and static-host-compatible hash navigation
+
 ## v0.8.1 — "Locks" (unreleased staging candidate)
 - Pay-to-Claim (PTC): paid-only `POST /paid/v1/agents/claim` plus `/paid-okx` mirror, one-time 256-bit `agent_secret`, SHA-256-at-rest, and settlement payer recorded as `claimed_by`
 - Claimed identities authenticate future operator registration with `X-Agent-Secret`; rotation atomically replaces the stored hash and invalidates the old secret
