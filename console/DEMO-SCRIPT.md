@@ -57,7 +57,8 @@ Briefly show Policies, then Telegram Binding.
 ## 2:18–2:55 — Where Codex accelerated the build
 
 Switch to the public repository and show `console/src/api.ts`,
-`console/src/token.ts`, and the tests.
+`console/src/token.ts`, and the tests. Display the `/feedback` session ID beside
+the core-build commit `12e479d` so both remain readable on screen.
 
 > I used Codex with GPT-5.6 for the Console core build. Codex accelerated
 > translating the frozen API contract into a typed client, implementing the six
@@ -66,8 +67,8 @@ Switch to the public repository and show `console/src/api.ts`,
 > security decisions: this stays a static no-secret client, paid routes are
 > blocked by an exhaustive allowlist before fetch, decoded tokens remain
 > untrusted until server verification, and approval polling never becomes an
-> API hammer. The `/feedback` session covering that core work is [PASTE EXACT
-> CORE-BUILD SESSION ID].
+> API hammer. The `/feedback` session covering that core work is
+> 019f75a2-5efc-70e1-818e-2514176abc6a.
 
 End on Dashboard:
 

@@ -103,14 +103,13 @@ respect the API's timing and backoff boundaries. Codex + GPT-5.6 accelerated
 the implementation, test generation, browser verification, and documentation
 of those decisions.
 
-The owner selected GPT-5.6 for the Console core-build session. Before
-submission, run Codex `/feedback` **in that same session** and copy its exact
-session ID and model label into the submission form and demo script. That
-session must cover the majority of the six-view Console, typed API safety
-adapter, token-tree behavior, tests, and verification—not merely a later docs
-edit. Do not infer, invent, or substitute a different session ID. A judge must
-be able to reconcile that session with the public branch history beginning at
-the Console core-build commit (`12e479d`).
+The owner selected GPT-5.6 for the Console core-build session. Its exact Codex
+`/feedback` session ID is
+`019f75a2-5efc-70e1-818e-2514176abc6a`. This is the same session that covers
+the majority of the six-view Console, typed API safety adapter, token-tree
+behavior, tests, and verification—not merely a later docs edit. The submission
+form and demo must reproduce this ID exactly. A judge can reconcile it with the
+public branch history beginning at the Console core-build commit (`12e479d`).
 
 ## Deployment boundary
 
