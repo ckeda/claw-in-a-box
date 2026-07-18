@@ -6,7 +6,9 @@
   "main": "service/server.js",
   "scripts": {
     "start": "npm --prefix service start",
-    "test": "npm --prefix service test"
+    "test": "npm --prefix service test",
+    "test:console": "npm --prefix console test",
+    "build:console": "npm --prefix console run build"
   },
   "engines": {
     "node": ">=18"

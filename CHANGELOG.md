@@ -5,6 +5,14 @@
 > pushed to this repository at the time. Development returned to this repo at
 > the v0.8.0 baseline. Dates are actual ship dates to production/staging.
 
+## Unreleased — Claw Console (OpenAI Build Week)
+- Static browser-only operator workbench in `console/`
+- Live Dashboard, Verdict Lab, Approval timeline, Token Workbench, Telegram binding helper and policy cards
+- Client-side free-endpoint allowlist blocks paid and unknown routes before `fetch`
+- Polite health/approval/binding polling with explicit `429` backoff
+- Bounded localStorage history and token state; no accounts or server-side keys
+- Responsive Claw-in-a-Box design system and static-host-compatible hash navigation
+
 ## v0.8.0 — "Memory" (2026-07-16, staging)
 - MySQL persistence layer (`storage.js`): `PERSISTENCE=off|shadow|on`
 - `shadow`: memory remains runtime source of truth; all mutations fire-and-forget dual-written to DB
