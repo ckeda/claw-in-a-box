@@ -1,5 +1,15 @@
 # Claw-in-a-Box 🦞📦
 
+> **OpenAI Build Week scope — Developer Tools.** The submission is Claw
+> Console, plus any v0.8.1+ security and persistence increments authored with
+> Codex + GPT-5.6 during the recorded core-build session. The v0.1–v0.8.0
+> service line predates that session: its v0.7.5 mainnet deployment and v0.8.0
+> staging baseline are the existing x402 infrastructure the new work operates
+> on, and are not claimed as Build Week work.
+>
+> Codex `/feedback` core-build session:
+> `019f75a2-5efc-70e1-818e-2514176abc6a`.
+
 **Bounded authorization for AI agents.** Your agent is the claw — it can
 grab, spend, and act. Claw-in-a-Box is the box: it limits what the claw can
 reach, how much it can spend, and for how long, with a human pull cord for
@@ -22,6 +32,24 @@ Marketplace listings:
 The repository baseline is v0.8.0 staging; the live mainnet service remains on
 its independently verified v0.7.5 deployment until the persistence rollout
 completes its staging, shadow, and observation gates.
+
+## Claw Console
+
+[`console/`](console/) contains the public, browser-only operator workbench for
+the July 2026 OpenAI Build Week submission. It visualizes live service health,
+guard verdicts, Telegram approvals, token delegation trees, binding, and policy
+presets while a typed safety layer prevents any paid-route request.
+
+Submission framing: **an operator console + security/persistence hardening I
+built with Codex for my already-live x402 service.** The Console is the new
+Build Week product; the live API it calls is pre-existing production
+infrastructure. Only later server increments actually authored in the same
+recorded Codex session belong to the submission.
+
+The Console is an independently deployable static SPA: no backend, privileged
+key, new API endpoint, or mainnet service change is required. See its
+[`README`](console/README.md) for judge mode, local setup, tests, and the human
+publication checklist.
 
 ## What it does
 
@@ -114,7 +142,7 @@ action, but only a protocol can make the action impossible.
 
 Production service sources live in `service/`; `plugins/nandatown/` contains
 the NANDA protocol integration, `docs/` records guarantee boundaries, and the
-browser Console will live in `console/`. Versions v0.2.0–v0.7.5 shipped as
+browser Console lives in `console/`. Versions v0.2.0–v0.7.5 shipped as
 reviewed deployment artifacts during a rapid NANDA → OKX.AI → x402 Bazaar
 sprint rather than as repository commits; their release history and the return
 to this repository at v0.8.0 are recorded in [`CHANGELOG.md`](CHANGELOG.md).
@@ -132,8 +160,13 @@ service/
 plugins/nandatown/    NANDA auth plugin, validators, scenario, and tests
 docs/guarantees.md    enforcement guarantees and honest boundaries
 CHANGELOG.md          release history, including artifact-only versions
-console/              static operator Console (introduced in v0.9.0)
+console/              static operator Console and Build Week submission
 ```
+
+The service history through v0.8.0 documents the production context and must
+not be presented as work created during the Build Week Codex session. The
+submission history starts with the Console branch and continues with only the
+v0.8.1+ increments authored and reviewed after that baseline.
 
 ## Self-hosting and tests
 
@@ -163,7 +196,7 @@ suite is necessary but never sufficient for mainnet promotion.
 ## Roadmap
 
 - **v0.8.1 — Locks:** Pay-to-Claim identity, strict mode, execution-bound verdicts, and audit events
-- **v0.9.0 — Face:** static operator Console and authenticated read APIs
+- **v0.9.0 — Face:** promote the Phase 0 Console and add authenticated read APIs
 - **v1.0.0 — Promise:** frozen `/v1` contract, public guarantees, and deprecation policy
 - **v1.1.0 — Probe:** trading-policy and MCP discovery experiments with written kill criteria
 
