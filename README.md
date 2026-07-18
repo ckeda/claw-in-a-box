@@ -1,80 +1,103 @@
 # Claw-in-a-Box 🦞📦
 
 **Bounded authorization for AI agents.** Your agent is the claw — it can
-grab, spend, act. Claw-in-a-Box is the box: hard limits on what the claw
-can reach, how much it can hold, and for how long — with one pull cord
-that retracts everything it ever handed out.
+grab, spend, and act. Claw-in-a-Box is the box: it limits what the claw can
+reach, how much it can spend, and for how long, with a human pull cord for
+high-risk actions.
 
-Two capabilities, one tiny zero-dependency service:
-
-1. **Delegatable capability tokens with cascading revocation** — an agent
-   holding a token can mint *narrower* tokens for other agents offline
-   (macaroon-style HMAC chaining). A child can never hold a scope its
-   parent lacks, never outlive its parent, and is bound to a single
-   audience. Revoke any token and every descendant dies with it, by
-   construction.
-2. **Spend-policy verdicts** — before acting, an agent asks
-   `POST /v1/guard/check` and gets back `allow | review | deny` with the
-   exact rules that fired. Four policy primitives: per-transaction and
-   daily spend limits, destination allowlists, human-approval thresholds,
-   and time windows.
-
-```bash
-# the whole deployment story
-GUARD_SECRET=$(openssl rand -hex 32) node service/server.js
-```
+Claw-in-a-Box is the human-approval layer for AI agent commerce. It combines
+deterministic spend-policy verdicts, attenuating capability tokens, Telegram
+human-in-the-loop approvals, and two production x402 payment rails in one API.
 
 Project home: **https://clawinabox.xyz** · Live API:
 **https://api.clawinabox.xyz** ([`/healthz`](https://api.clawinabox.xyz/healthz))
-· Agent-facing API doc: [`service/SKILL.md`](service/SKILL.md)
-(also served at [`/skill.md`](https://api.clawinabox.xyz/skill.md)).
+· Agent-facing API reference: [`service/SKILL.md`](service/SKILL.md)
+([live copy](https://api.clawinabox.xyz/skill.md))
 
-## Why
+Marketplace listings:
 
-Agents increasingly hire other agents, call paid APIs, and move money.
-The prevailing pattern — hand the sub-agent your full credentials and
-hope — fails in three familiar ways: scope creep (the helper ends up
-with more power than the task needs), zombie access (nobody remembers
-what was handed out, so nothing gets cleanly withdrawn), and confused
-deputies (a token leaks and whoever holds it is believed).
+- [ClawGuard on OKX.AI](https://www.okx.ai/agents/5854) — USDT0 on X Layer through the official OKX x402 SDK
+- [Claw-in-a-Box on Agentic.Market](https://agentic.market/services/api-clawinabox-xyz) — USDC on Base through the Coinbase/x402 Bazaar rail
 
-Claw-in-a-Box makes the safe pattern the easy pattern:
+The repository baseline is v0.8.0 staging; the live mainnet service remains on
+its independently verified v0.7.5 deployment until the persistence rollout
+completes its staging, shadow, and observation gates.
 
-- **Attenuate, don't share.** Delegation is one HTTP call and needs no
-  round-trip to the original issuer. Every hop can only narrow.
-- **Revoke once, kill the tree.** Cascading revocation is cryptographic
-  (each child's signature is keyed by its parent's), not bookkeeping.
-- **Ask before you act.** The spend guard turns "should my agent do
-  this?" into a deterministic verdict an agent can be instructed to obey
-  — including `review`, an explicit hand-off point to a human.
+## What it does
 
-## Quickstart (60 seconds)
+### Spend-policy verdicts
+
+Before spending, an agent calls `POST /v1/guard/check` with an amount,
+destination, and either a preset or inline policy. The service returns
+`allow`, `review`, or `deny`, plus the exact rules and reasons that fired.
+
+The policy engine supports per-transaction caps, daily cumulative budgets,
+destination allowlists, human-review thresholds, and time windows. The free
+route is part of the public NANDA contract and never requires payment.
+
+### Telegram human approval
+
+A `review` verdict creates a short-lived approval and sends Approve/Deny
+buttons to a human in Telegram. Callers can poll the approval or wait for its
+resolution, and operators can bind their own Telegram chat through a one-time
+`/bind CODE` flow.
+
+### Delegatable capability tokens
+
+An agent can mint a root token and delegate narrower children or grandchildren.
+Every hop can only reduce scopes, shorten lifetime, and bind to one audience.
+Revoking an ancestor invalidates its entire descendant tree.
+
+### Paid x402 mirrors
+
+The same authorization engine is available for $0.01 per delivered call on two
+payment rails:
+
+- `/paid-okx/*` uses the OKX x402 envelope and X Layer/USDT0.
+- `/paid/*` on `api.clawinabox.xyz` uses Base/USDC and publishes Bazaar discovery metadata.
+
+Free `/v1/*` endpoints remain outside both payment middlewares. Business
+failures are checked before settlement so callers are not charged for rejected
+requests.
+
+### Restart-safe persistence
+
+v0.8.0 adds an optional MySQL layer with three rollout modes:
+
+- `PERSISTENCE=off` — v0.7 behavior; no database path is loaded.
+- `PERSISTENCE=shadow` — memory stays authoritative while mutations are dual-written asynchronously.
+- `PERSISTENCE=on` — shadow writes plus boot-time hydration of revocations, daily spend, operator bindings, and pending approvals.
+
+Database failures degrade to in-memory operation and appear in `/healthz`;
+they do not block ordinary requests. Multi-replica coordination is not yet a
+guarantee because memory remains the runtime source of truth.
+
+## Quickstart
+
+Call the hosted free API without an account:
 
 ```bash
 BASE=https://api.clawinabox.xyz
 
-# a verdict before spending
-curl -s -X POST $BASE/v1/guard/check \
-  -d '{"agent_id":"my-agent","amount":150}'
-# -> {"verdict":"review","triggered_rules":["require_approval"],...}
+curl -s -X POST "$BASE/v1/guard/check" \
+  -d '{"agent_id":"my-agent","amount":30}'
 
-# mint a root capability, delegate a narrower one, revoke the tree
-ROOT=$(curl -s -X POST $BASE/v1/tokens \
+ROOT=$(curl -s -X POST "$BASE/v1/tokens" \
   -d '{"subject":"boss","scopes":["read","write","pay"]}' | jq -r .token)
-curl -s -X POST $BASE/v1/tokens/delegate \
+
+curl -s -X POST "$BASE/v1/tokens/delegate" \
   -d "{\"parent_token\":\"$ROOT\",\"audience\":\"worker\",\"scopes\":[\"read\"],\"ttl_seconds\":600}"
-curl -s -X POST $BASE/v1/tokens/revoke -d "{\"token\":\"$ROOT\"}"
 ```
 
-Full endpoint reference, error codes, policy schema, and recommended
-agent patterns: [`service/SKILL.md`](service/SKILL.md).
+Full endpoint shapes, policy schemas, error codes, payment behavior, and
+recommended agent patterns are documented in [`service/SKILL.md`](service/SKILL.md).
 
 ## One idea, three enforcement surfaces
 
-The design thesis of this project is that *bounded authorization* — a
-grant that can only shrink as it moves, and dies with its ancestors —
-is one abstraction that should be enforced wherever an agent acts, at
-whatever guarantee strength that surface supports:
+The design thesis of this project is that *bounded authorization* — a grant
+that can only shrink as it moves, and dies with its ancestors — is one
+abstraction that should be enforced wherever an agent acts, at whatever
+guarantee strength that surface supports:
 
 | surface | instance | guarantee grade |
 |---|---|---|
@@ -82,44 +105,69 @@ whatever guarantee strength that surface supports:
 | agent-protocol simulation | [NANDA Town](https://github.com/projnanda/nandatown) `auth: delegatable` plugin ([`plugins/nandatown/`](plugins/nandatown/)) | gateway-enforced, adversarially validated |
 | on-chain smart accounts | session-key constraint compiler (roadmap) | protocol-enforced |
 
-The same four policy primitives compile to each surface; what changes is
-who enforces them. That distinction is spelled out honestly in
-[`docs/guarantees.md`](docs/guarantees.md) — a gateway can refuse to
-bless an action, but only a protocol can make the action impossible.
+The same policy primitives can be carried across these surfaces; what changes
+is who enforces them. That distinction is spelled out honestly in
+[`docs/guarantees.md`](docs/guarantees.md): a gateway can refuse to bless an
+action, but only a protocol can make the action impossible.
 
-## Repository layout
+## Repository history and layout
 
+Production service sources live in `service/`; `plugins/nandatown/` contains
+the NANDA protocol integration, `docs/` records guarantee boundaries, and the
+browser Console will live in `console/`. Versions v0.2.0–v0.7.5 shipped as
+reviewed deployment artifacts during a rapid NANDA → OKX.AI → x402 Bazaar
+sprint rather than as repository commits; their release history and the return
+to this repository at v0.8.0 are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+
+```text
+service/
+  server.js           production HTTP service
+  storage.js          optional MySQL persistence
+  landing.js          API landing page template
+  status.js           status page and probes
+  SKILL.md            agent-facing API documentation
+  test-v2.js          38-case baseline suite across six boot modes
+  package.json        deployable service manifest
+  package-lock.json   locked Node 18-compatible dependency graph
+plugins/nandatown/    NANDA auth plugin, validators, scenario, and tests
+docs/guarantees.md    enforcement guarantees and honest boundaries
+CHANGELOG.md          release history, including artifact-only versions
+console/              static operator Console (introduced in v0.9.0)
 ```
-service/              zero-dependency Node.js service (node >= 18)
-  server.js           the entire service
-  SKILL.md            agent-facing API documentation (served at /skill.md)
-  test.js             12-case smoke suite: node test.js
-  demo.sh             narrated terminal walkthrough for screen-recording
-plugins/nandatown/    Python implementation of the same protocol as a
-                      NANDA Town auth-layer plugin, with adversarial
-                      validators and a delegation-tree scenario
-docs/guarantees.md    what is guaranteed, by whom, and what is not
-```
 
-## Self-hosting
+## Self-hosting and tests
+
+Node.js 18 or newer is required. The production dependency graph deliberately
+pins `jose` v5 through `overrides` for Node 18 CommonJS compatibility.
 
 ```bash
 cd service
-GUARD_SECRET=$(openssl rand -hex 32) PORT=8787 node server.js
-node test.js    # exits 0 on green
+npm ci
+GUARD_SECRET=$(openssl rand -hex 32) PORT=8787 npm start
 ```
 
-No npm install. State (revocations, daily totals) is in-memory by
-design at this stage — see `docs/guarantees.md` before pointing
-production funds at it.
+Persistence is off by default. To enable it, configure `DB_HOST`, `DB_PORT`,
+`DB_USER`, `DB_PASSWORD`, and `DB_NAME`, then select `PERSISTENCE=shadow` or
+`PERSISTENCE=on` according to the rollout plan.
+
+Run the complete local suite from `service/`:
+
+```bash
+npm test
+```
+
+The release gate runs the suite on Node 18 and Node 22. Server deployment also
+requires staging acceptance and live invariant verification; a passing local
+suite is necessary but never sufficient for mainnet promotion.
 
 ## Roadmap
 
-- Persistent revocation and spend state (SQLite)
-- Webhook / Telegram hand-off for `review` verdicts (human-in-the-loop)
-- Policy compiler targeting ERC-4337 session keys and Safe modules —
-  the protocol-enforced row of the table above
-- x402 pay-per-call support for hosted deployments
+- **v0.8.1 — Locks:** Pay-to-Claim identity, strict mode, execution-bound verdicts, and audit events
+- **v0.9.0 — Face:** static operator Console and authenticated read APIs
+- **v1.0.0 — Promise:** frozen `/v1` contract, public guarantees, and deprecation policy
+- **v1.1.0 — Probe:** trading-policy and MCP discovery experiments with written kill criteria
+
+See [`CHANGELOG.md`](CHANGELOG.md) for shipped changes and version dates.
 
 ## License
 

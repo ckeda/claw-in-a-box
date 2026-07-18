@@ -1,5 +1,13 @@
+*.env
 node_modules/
 nohup.out
 *.log
 .env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+secrets/
 .DS_Store

@@ -1,12 +1,15 @@
 {
-  "name": "claw-in-a-box",
-  "version": "0.1.0",
-  "description": "Bounded authorization for AI agents",
+  "name": "claw-in-a-box-repository",
+  "version": "0.8.0",
+  "private": true,
+  "description": "Repository wrapper for the Claw-in-a-Box service and protocol integrations",
   "main": "service/server.js",
   "scripts": {
-    "start": "node service/server.js",
-    "test": "node service/test.js"
+    "start": "npm --prefix service start",
+    "test": "npm --prefix service test"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "Apache-2.0"
 }

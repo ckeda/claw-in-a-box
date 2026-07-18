@@ -1,9 +1,28 @@
 {
   "name": "claw-in-a-box",
-  "version": "0.1.0",
-  "description": "Bounded authorization for AI agents: delegatable capability tokens with cascading revocation, plus spend-policy verdicts.",
+  "version": "0.8.0",
+  "description": "Bounded authorization for AI agents - x402 pay-per-call (OKX + CDP/Bazaar) and Telegram HITL",
   "main": "server.js",
-  "scripts": { "start": "node server.js", "test": "node test.js" },
-  "engines": { "node": ">=18" },
-  "license": "Apache-2.0"
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test-v2.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "@okxweb3/x402-core": "~0.1.0",
+    "@okxweb3/x402-evm": "~0.2.1",
+    "@okxweb3/x402-express": "~0.1.1",
+    "@x402/express": "~2.18.0",
+    "@x402/core": "~2.18.0",
+    "@x402/evm": "~2.18.0",
+    "@x402/extensions": "~2.18.0",
+    "@coinbase/x402": "~2.1.0",
+    "mysql2": "^3.11.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "overrides": {
+    "jose": "^5.9.6"
+  }
 }

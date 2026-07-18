@@ -4,13 +4,29 @@ Bounded authorization for AI agents: delegatable capability tokens with
 cascading revocation, plus spend-policy verdicts. Ask before you act;
 delegate less than you hold; revoke once, kill the whole subtree.
 
-- **Base URL**: `https://api.clawinabox.xyz` (replace with the live endpoint
-  from your deployment; verify with `GET /healthz`)
+- **Base URL**: `{{BASE_URL}}` (this service runs on two hosts with
+  different payment rails - see "Deployments" below; verify with `GET /healthz`)
 - **Auth**: none required for the demo deployment
 - **Format**: JSON in, JSON out. All POST bodies are `application/json`.
 - **Companion**: the same protocol ships as a NANDA Town auth plugin
   (`auth: delegatable`) with adversarial validators — see
   `plugins/nandatown/` in this repository.
+
+## Deployments
+
+The same codebase serves two hosts. Free routes (`/v1/*`) are identical on
+both; paid routes (`/paid/v1/*`) run the same business logic and differ only
+in how the x402 payment settles:
+
+| Endpoint prefix | Payment rail | Listed on |
+|---|---|---|
+| `https://api.clawinabox.xyz/paid/v1/*` | USDC on Base (`eip155:8453`), Coinbase CDP facilitator | x402 Bazaar / Agentic.Market |
+| `https://api.clawinabox.xyz/paid-okx/v1/*` | USDT0 on X Layer (`eip155:196`), OKX OnchainOS facilitator | OKX.AI |
+| `https://okx.clawinabox.xyz/paid/v1/*` | USDT0 on X Layer (legacy alias, kept alive) | — |
+
+The 402 challenge you receive on either host declares the correct network,
+asset and amount for that host - clients should always read the challenge
+rather than hardcoding payment details.
 
 ## What this service is for
 
@@ -30,7 +46,7 @@ should check the action against a policy first. This service does both:
 ## Quickstart (60 seconds)
 
 ```bash
-BASE=https://api.clawinabox.xyz
+BASE={{BASE_URL}}
 
 # 1) health
 curl -s $BASE/healthz
@@ -198,11 +214,70 @@ cover the request before serving it.
   resets on restart and daily totals reset at UTC midnight. Do not use
   the hosted demo for production funds.
 
+
+## Paid endpoints (x402 pay-per-call)
+
+Mirrors of the endpoints above, gated by the x402 payment standard —
+these are the endpoints listed on OKX.AI (A2MCP):
+
+- `POST /paid/v1/guard/check` — same request/response as the free route.
+- `POST /paid/v1/tokens/verify` — same request/response as the free route.
+
+Flow (x402 v2, official OKX Payment SDK, A2MCP standard):
+
+1. Call without payment (GET or POST) → `HTTP 402`. The `PAYMENT-REQUIRED`
+   response header is **base64-encoded JSON**:
+   `{"x402Version":2,"resource":{...},"accepts":[...]}` with
+   `accepts[0]`: scheme `exact`, network `eip155:196` (X Layer), asset
+   USDT0 (`0x779d…3736`), amount `10000` (0.01 USDT, 6 decimals),
+   `payTo` the service's X Layer address, and the USDT0 EIP-712 domain in
+   `extra` (`{"name":"USD₮0","version":"1"}`).
+2. Sign the payment (EIP-3009 `transferWithAuthorization`) and retry with
+   the base64 `PAYMENT-SIGNATURE` header.
+3. The SDK verifies with the OKX facilitator, the service runs the
+   verdict, and the payment settles on success — you get the verdict plus
+   a `PAYMENT-RESPONSE` header. Failed business logic is never settled.
+
+## Human-in-the-loop approvals
+
+A `review` verdict routes to a human on Telegram for approval — no
+approval, no money. By default this goes to the service operator, but
+**you can bind your own Telegram so your agent's reviews come to your
+phone**:
+
+1. `POST /v1/operators/register` with `{"agent_id":"<your-agent>"}` →
+   returns a one-time `bind_code`.
+2. Message the Claw-in-a-Box bot on Telegram: `/bind <bind_code>`.
+3. From then on, any `review` for that `agent_id` is sent to *your*
+   chat with Approve / Deny buttons. Unbound agents fall back to the
+   operator.
+
+When a `review` fires, the response includes the approval workflow:
+
+```json
+{
+  "verdict": "review",
+  "approval_id": "a1b2c3d4e5f60708",
+  "approval_status": "pending",
+  "poll": "/v1/approvals/a1b2c3d4e5f60708",
+  "note": "A human has been notified on Telegram..."
+}
+```
+
+- Poll `GET /v1/approvals/{id}` until `status` becomes `approved`,
+  `denied`, or `expired` (`final_verdict` is `allow` or `deny`).
+- Or send `"wait": true` in the original request to block until a human
+  decides (or the timeout passes — default 120s, then denied).
+
+A human operator tapping **Approve** is the only way a `review`
+becomes an `allow`. Enforce before, not audit after.
+
 ## Self-hosting
 
-Zero dependencies, Node.js >= 18:
+One dependency (Express), Node.js >= 18:
 
 ```bash
+npm install
 GUARD_SECRET=$(openssl rand -hex 32) PORT=8787 node server.js
 node test.js   # 12-case smoke suite, exits 0 on success
 ```
