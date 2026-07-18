@@ -219,13 +219,14 @@ tbody tr:hover { background: #fffaf8; }
 
 /* Policies */
 .policy-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-.policy-card { position: relative; overflow: hidden; padding-top: 26px; }
+.policy-card { position: relative; overflow: hidden; padding-top: 26px; display: flex; flex-direction: column; }
 .policy-index { position: absolute; top: 13px; right: 16px; color: #e5eaf0; font: 800 43px var(--display); }
 .policy-card h2 { font-size: 31px; text-transform: capitalize; position: relative; }
 .policy-card ul { list-style: none; padding: 0; margin: 23px 0; display: grid; gap: 13px; min-height: 173px; }
 .policy-card li { display: grid; gap: 5px; padding-bottom: 11px; border-bottom: 1px solid var(--line); }
 .policy-card li code { width: fit-content; color: var(--coral-dark); background: var(--coral-soft); border-radius: 4px; padding: 2px 5px; }
 .policy-card li span { color: #5d687b; font-size: 12.5px; }
+.policy-card > .button { margin-top: auto; }
 .explain-strip { margin-top: 14px; display: flex; gap: 18px; align-items: center; justify-content: center; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, .72); color: var(--steel); font-size: 13px; }
 .explain-strip strong { color: var(--ink); }
 
