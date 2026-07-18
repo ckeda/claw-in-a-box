@@ -3,6 +3,15 @@ import { getPolicies } from "../api";
 import type { Policy, PolicyRule } from "../types";
 import { ApiErrorBox, LoadingLine, PageHeader } from "../components/UI";
 
+export const POLICY_RULE_SLOTS = ["spend_limit", "require_approval", "allowlist"] as const;
+
+export function policyRuleSlots(rules: PolicyRule[]) {
+  return POLICY_RULE_SLOTS.map((type) => ({
+    type,
+    rule: rules.find((rule) => rule.type === type),
+  }));
+}
+
 function ruleSentence(rule: PolicyRule): string {
   if (rule.type === "spend_limit") return `Per transaction ${rule.per_tx ?? "—"}; daily ${rule.daily ?? "—"}`;
   if (rule.type === "require_approval") return `Human review above ${rule.when_amount_over}`;
@@ -48,10 +57,10 @@ export default function Policies({ onUsePolicy }: { onUsePolicy: (policy: Policy
             <p className="eyebrow">Preset</p>
             <h2>{policy.name}</h2>
             <ul>
-              {policy.rules.map((rule, ruleIndex) => (
-                <li key={`${rule.type}-${ruleIndex}`}>
-                  <code>{rule.type}</code>
-                  <span>{ruleSentence(rule)}</span>
+              {policyRuleSlots(policy.rules).map(({ type, rule }) => (
+                <li className={rule ? undefined : "policy-rule-empty"} key={type}>
+                  <code>{type}</code>
+                  <span>{rule ? ruleSentence(rule) : "— not set"}</span>
                 </li>
               ))}
             </ul>
