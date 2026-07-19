@@ -10,6 +10,18 @@
 > Codex `/feedback` core-build session:
 > `019f75a2-5efc-70e1-818e-2514176abc6a`.
 
+## Build Week submission map
+
+| Deliverable | Source | Review and deployment status |
+|---|---|---|
+| Operator Console | [`agent/console-build-week`](https://github.com/ckeda/claw-in-a-box/tree/agent/console-build-week) · [Draft PR #1](https://github.com/ckeda/claw-in-a-box/pull/1) | Built from scratch for Build Week; frozen contest build at [console.clawinabox.xyz](https://console.clawinabox.xyz) |
+| v0.8.1 “Locks” | [`agent/v0.8.1`](https://github.com/ckeda/claw-in-a-box/tree/agent/v0.8.1) · [Draft PR #2](https://github.com/ckeda/claw-in-a-box/pull/2) | Independently reviewed and staging-accepted |
+| v0.9.0 “Face” | [`agent/v0.9.0`](https://github.com/ckeda/claw-in-a-box/tree/agent/v0.9.0) · [Draft PR #3](https://github.com/ckeda/claw-in-a-box/pull/3) | Independently reviewed, owner-accepted, and live on permanent staging at [test.clawinabox.xyz](https://test.clawinabox.xyz) |
+
+For exact Codex/owner attribution, commits, test counts, and artifact hashes,
+read the [Codex/GPT-5.6 self-summary](https://github.com/ckeda/claw-in-a-box/blob/agent/v0.9.0/docs/GPT-BUILD-WEEK-SELF-SUMMARY.md).
+**Boundary:** v0.1–v0.8.0 is pre-existing infrastructure, not submission work.
+
 **Bounded authorization for AI agents.** Your agent is the claw — it can
 grab, spend, and act. Claw-in-a-Box is the box: it limits what the claw can
 reach, how much it can spend, and for how long, with a human pull cord for
@@ -29,14 +41,49 @@ Marketplace listings:
 - [ClawGuard on OKX.AI](https://www.okx.ai/agents/5854) — USDT0 on X Layer through the official OKX x402 SDK
 - [Claw-in-a-Box on Agentic.Market](https://agentic.market/services/api-clawinabox-xyz) — USDC on Base through the Coinbase/x402 Bazaar rail
 
-This branch is the v0.9.0 staging candidate. The live mainnet service remains
-on its independently verified release until the owner completes staging,
-shadow, verify-live, and observation gates; this repository state is not a
-claim that v0.8.1 or v0.9.0 has been promoted.
+**Live surfaces:** mainnet [api.clawinabox.xyz](https://api.clawinabox.xyz)
+(v0.7.5, frozen through the July 21 submission) · permanent staging
+[test.clawinabox.xyz](https://test.clawinabox.xyz) (v0.9.0) · Console
+[console.clawinabox.xyz](https://console.clawinabox.xyz) (frozen contest build).
+
+## System architecture
+
+```mermaid
+graph TB
+    Agent["Buyer / agent"]
+    Main["api.clawinabox.xyz<br/>mainnet · v0.7.5"]
+    Stage["test.clawinabox.xyz<br/>permanent staging · v0.9.0"]
+    Console["console.clawinabox.xyz<br/>static observer · frozen build"]
+    Router{"Host + path router"}
+    Free["Free /v1/*<br/>NANDA contract<br/>unclaimed + non-strict: never 402/403"]
+    CDP["/paid/*<br/>CDP · Base · USDC<br/>mainnet Bazaar-discoverable"]
+    OKX["/paid-okx/*<br/>OKX · X Layer · USDT0"]
+    Core["Core service<br/>guard · tokens · approvals"]
+    DB[("MySQL<br/>off · shadow · on")]
+    TG["Telegram HITL"]
+
+    Agent --> Main
+    Agent --> Stage
+    Main --> Router
+    Stage --> Router
+    Router --> Free
+    Router --> CDP
+    Router --> OKX
+    Free --> Core
+    CDP --> Core
+    OKX --> Core
+    Core <--> DB
+    Core <--> TG
+    Console -.-> Main
+```
+
+The Console observes and operates through declared HTTP APIs; the service—not
+the UI—enforces identity, policy, persistence, payment, and human decisions.
 
 ## Claw Console
 
-[`console/`](console/) contains the public, browser-only operator workbench for
+[`console/`](https://github.com/ckeda/claw-in-a-box/tree/agent/console-build-week/console)
+contains the public, browser-only operator workbench for
 the July 2026 OpenAI Build Week submission. It visualizes live service health,
 guard verdicts, Telegram approvals, token delegation trees, binding, and policy
 presets while a typed safety layer prevents any paid-route request.
@@ -50,7 +97,8 @@ recorded Codex session belong to the submission.
 The Console is an independently deployable static SPA. Its visitor tools need
 no key; v0.9 agent-owner and operator views are enforced by the service's new
 read/recovery APIs. See its
-[`README`](console/README.md) for judge mode, local setup, tests, and the human
+[`README`](https://github.com/ckeda/claw-in-a-box/blob/agent/console-build-week/console/README.md)
+for judge mode, local setup, tests, and the human
 publication checklist.
 
 ## What it does
@@ -72,6 +120,37 @@ buttons to a human in Telegram. Callers can poll the approval or wait for its
 resolution, and operators can bind their own Telegram chat through a one-time
 `/bind CODE` flow.
 
+This is the signature live-demo path:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Agent
+    participant API as guard/check
+    participant Core as Guard + approvals
+    participant TG as Telegram
+    participant Human
+
+    Agent->>API: amount over review threshold, bind true
+    API->>Core: evaluate policy
+    Core->>Core: create pending approval
+    Core-->>Agent: review + approval_id
+    Core->>TG: push Approve / Deny buttons
+    TG->>Human: a human's phone buzzes
+    Human->>TG: tap Approve or Deny
+    TG->>Core: authenticated webhook decision
+    alt Approved
+        Core-->>Agent: final allow + optional verdict_id
+        Agent->>API: consume verdict_id
+        API->>Core: consume once
+        Core-->>Agent: 200 consumed
+        Agent->>API: consume same verdict_id again
+        API-->>Agent: 409 already_consumed
+    else Denied or timed out
+        Core-->>Agent: final deny
+    end
+```
+
 ### Delegatable capability tokens
 
 An agent can mint a root token and delegate narrower children or grandchildren.
@@ -89,6 +168,32 @@ payment rails:
 Free `/v1/*` endpoints remain outside both payment middlewares. Business
 failures are checked before settlement so callers are not charged for rejected
 requests.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Buyer
+    participant API as Paid endpoint
+    participant Pay as Facilitator
+    participant Core as Business logic
+
+    Buyer->>API: request without payment
+    API-->>Buyer: 402 + payment challenge
+    Buyer->>API: retry + payment header
+    API->>Pay: verify authorization
+    Pay-->>API: verified payer
+    API->>Core: run business checks
+    alt Business conflict, such as duplicate claim
+        Core-->>API: 409 conflict
+        API-->>Buyer: 409 · no settlement · no charge
+    else Business succeeds
+        Core-->>API: deliverable response
+        API->>Pay: settle
+        Pay-->>API: settlement receipt
+        API-->>Buyer: response + payment receipt
+    end
+    Note over API,Pay: Business failure never reaches settlement
+```
 
 ### Restart-safe persistence
 
@@ -123,6 +228,29 @@ expiry. Unconsumed verdicts expire and refund their same-day ledger charge,
 including expiry during downtime. Audit events persist the claim, binding,
 approval, verdict, mismatch, and revocation lifecycle.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Unclaimed
+    Unclaimed --> Claimed: paid claim + settlement
+    Claimed --> Claimed: rotate secret
+    Claimed --> Claimed: strict mode on / off
+    Claimed --> Challenge: request recovery
+    Challenge --> Verifying: EIP-191 signature
+    Challenge --> Expired: TTL elapsed
+    Verifying --> Challenge: invalid signer
+    Verifying --> Used: valid signer + atomic rotation
+    Used --> Claimed: new secret active
+    Expired --> Claimed: request a new challenge
+
+    note right of Claimed
+        claimed_by is the settlement wallet
+    end note
+    note right of Challenge
+        Requires connected, hydrated PERSISTENCE=on
+        Otherwise HTTP 503; no memory fallback
+    end note
+```
+
 ### Authenticated operational views and wallet recovery
 
 v0.9.0 adds three server-enforced Console roles. Visitors can read public,
@@ -139,6 +267,19 @@ contract and custodial claimers require manual operator recovery. All three
 new reads and recovery fail closed unless `PERSISTENCE=on` is connected and
 hydrated. In the Console, the operator key is sessionStorage/in-memory only;
 the lower-scope agent secret may be stored in localStorage.
+
+```mermaid
+graph LR
+    Visitor["Visitor<br/>no credential"] --> Public["Public metrics<br/>demo + free endpoints"]
+    Owner["Agent owner<br/>X-Agent-Secret"] --> Spend["Own spend history"]
+    Owner --> Strict["Own strict mode"]
+    Owner --> Rebind["Own Telegram rebind"]
+    Operator["Operator<br/>Authorization: Bearer"] --> Feed["Approvals god-view<br/>read-only in v0.9"]
+    Operator -.-> Boundary["No bypass of<br/>agent-secret boundaries"]
+```
+
+The operator credential exposes the cross-agent approval list, but it is not a
+superuser token: it cannot read an owner's spend or perform owner mutations.
 
 ## Quickstart
 
@@ -207,6 +348,23 @@ llms.txt              root-site machine-readable project summary
 console/              static operator Console and Build Week submission
 ```
 
+```mermaid
+graph TB
+    Repo["claw-in-a-box/"]
+    Repo --> Service["service/"]
+    Repo --> ConsoleDir["console/"]
+    Repo --> Docs["docs/"]
+    Repo --> Plugin["plugins/nandatown/"]
+    Service --> Server["server.js · HTTP + policy"]
+    Service --> Storage["storage.js · MySQL"]
+    Service --> Tests["test-v2 · test-v081 · test-v09"]
+    ConsoleDir --> Client["typed API client"]
+    ConsoleDir --> Pages["operator views"]
+    Docs --> Guarantees["guarantees + reviewed designs"]
+    Docs --> Attribution["Codex self-summary"]
+    Plugin --> NANDA["NANDA auth plugin"]
+```
+
 The service history through v0.8.0 documents the production context and must
 not be presented as work created during the Build Week Codex session. The
 submission history starts with the Console branch and continues with only the
@@ -237,12 +395,36 @@ The release gate runs the suite on Node 18 and Node 22. Server deployment also
 requires staging acceptance and live invariant verification; a passing local
 suite is necessary but never sufficient for mainnet promotion.
 
+```mermaid
+graph LR
+    All["test-all.js"] --> Base["38 baseline assertions"]
+    All --> Locks["86 v0.8.1 assertions"]
+    All --> Face["43 v0.9 assertions"]
+    Mock["mysql-preload<br/>no real DB"] -.-> Locks
+    Mock -.-> Face
+    Base --> Runtime["167 server runtime assertions"]
+    Locks --> Runtime
+    Face --> Runtime
+    ConsoleTests["Console Vitest<br/>20 tests"] --> Matrix["Node 18 + Node 22"]
+    Runtime --> Matrix
+    Matrix --> Live["verify-live probes"]
+    Live --> Staging["owner acceptance<br/>test.clawinabox.xyz"]
+```
+
+There are 158 named server test call sites and 167 runtime assertions because
+nine v0.8.1 assertions execute through shared loops. Runtime output is the
+judge-reproducible headline.
+
 ## Roadmap
 
-- **v0.8.1 — Locks:** Pay-to-Claim identity, strict mode, execution-bound verdicts, and audit events
-- **v0.9.0 — Face:** authenticated operational views, recovery, and the official Console source
-- **v1.0.0 — Promise:** frozen `/v1` contract, public guarantees, and deprecation policy
-- **v1.1.0 — Probe:** trading-policy and MCP discovery experiments with written kill criteria
+| Version | Theme | Exact status |
+|---|---|---|
+| v0.7.5 | Production service | **Live mainnet** at `api.clawinabox.xyz`; frozen through the July 21 submission |
+| [v0.8.0](https://github.com/ckeda/claw-in-a-box/tree/v0.8.0) | Memory | **Staging-verified baseline**; tag `v0.8.0` |
+| [v0.8.1](https://github.com/ckeda/claw-in-a-box/pull/2) | Locks | **Implemented, independently reviewed, staging-accepted**; Draft PR #2 |
+| [v0.9.0](https://github.com/ckeda/claw-in-a-box/pull/3) | Face | **Implemented, independently reviewed, deployed to `test.clawinabox.xyz`, owner-accepted, Draft**; PR #3 |
+| v1.0.0 | Promise | **Planned** — frozen `/v1` contract, public guarantees, and deprecation policy |
+| v1.1.0 | Probe | **Planned** — trading-policy and MCP discovery experiments with written kill criteria |
 
 See [`CHANGELOG.md`](CHANGELOG.md) for shipped changes and version dates.
 
