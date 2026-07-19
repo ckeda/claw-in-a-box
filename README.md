@@ -63,23 +63,16 @@ the UI—enforces identity, policy, persistence, payment, and human decisions.
 ## Claw Console
 
 [`console/`](https://github.com/ckeda/claw-in-a-box/tree/agent/console-build-week/console)
-contains the public, browser-only operator workbench for
-the July 2026 OpenAI Build Week submission. It visualizes live service health,
+contains the public, browser-only operator workbench for the live service.
+It visualizes live service health,
 guard verdicts, Telegram approvals, token delegation trees, binding, and policy
 presets while a typed safety layer prevents any paid-route request.
-
-Submission framing: **an operator console + security/persistence hardening I
-built with Codex for my already-live x402 service.** The Console is the new
-Build Week product; the live API it calls is pre-existing production
-infrastructure. Only later server increments actually authored in the same
-recorded Codex session belong to the submission.
 
 The Console is an independently deployable static SPA. Its visitor tools need
 no key; v0.9 agent-owner and operator views are enforced by the service's new
 read/recovery APIs. See its
 [`README`](https://github.com/ckeda/claw-in-a-box/blob/agent/console-build-week/console/README.md)
-for judge mode, local setup, tests, and the human
-publication checklist.
+for local setup, tests, and operational notes.
 
 ## What it does
 
@@ -385,7 +378,7 @@ docs/guarantees.md    enforcement guarantees and honest boundaries
 docs/v0.9.0-design.md reviewed Face API, data, threat, and Console design
 CHANGELOG.md          release history, including artifact-only versions
 llms.txt              root-site machine-readable project summary
-console/              static operator Console and Build Week submission
+console/              static operator Console
 ```
 
 ```mermaid
@@ -404,11 +397,6 @@ graph TB
     Docs --> Attribution["Codex self-summary"]
     Plugin --> NANDA["NANDA auth plugin"]
 ```
-
-The service history through v0.8.0 documents the production context and must
-not be presented as work created during the Build Week Codex session. The
-submission history starts with the Console branch and continues with only the
-v0.8.1+ increments authored and reviewed after that baseline.
 
 ## License
 
