@@ -773,6 +773,8 @@ if (PAYMENT_MODE === "okx-x402") {
 // there is no separate listing or review step.
 //   env: CDP_API_KEY_ID / CDP_API_KEY_SECRET (portal.cdp.coinbase.com)
 //        CDP_PAY_TO (defaults to X402_PAY_TO - same EVM address works on Base)
+//        DISCOVERY=off disables Bazaar declarations for permanent staging
+const DISCOVERY_ENABLED = String(process.env.DISCOVERY || "on").toLowerCase() !== "off";
 const CDP = {
   keyId: process.env.CDP_API_KEY_ID || "",
   keySecret: process.env.CDP_API_KEY_SECRET || "",
@@ -805,10 +807,6 @@ if (CDP_ENABLED) {
   const { HTTPFacilitatorClient } = require("@x402/core/server");
   const { ExactEvmScheme: CdpExactEvmScheme } = require("@x402/evm/exact/server");
   const { createFacilitatorConfig } = require("@coinbase/x402");
-  const {
-    bazaarResourceServerExtension,
-    declareDiscoveryExtension,
-  } = require("@x402/extensions/bazaar");
 
   // createFacilitatorConfig defaults to https://api.cdp.coinbase.com/platform/v2/x402
   // and signs verify/settle with the CDP keys. Tests point it at a local mock.
@@ -821,7 +819,6 @@ if (CDP_ENABLED) {
 
   const cdpResourceServer = new CdpResourceServerCtor(cdpFacilitatorClient)
     .register(CDP.network, new CdpExactEvmScheme());
-  cdpResourceServer.registerExtension(bazaarResourceServerExtension);
   installClaimPaymentHooks(cdpResourceServer);
 
   const cdpAccepts = {
@@ -832,48 +829,58 @@ if (CDP_ENABLED) {
     maxTimeoutSeconds: CDP.maxTimeoutSeconds,
   };
 
-  // Bazaar semantic search ranks on description + schema quality; these are
-  // the listing copy, not just docs. POST routes carry full discovery
-  // metadata; GET mirrors exist for probes and are not declared discoverable.
-  const guardDiscovery = declareDiscoveryExtension({
-    method: "POST",
-    input: { agent_id: "agent-7", amount: 150, destination: "merchant-x", policy: "standard" },
-    inputSchema: {
-      properties: {
-        agent_id: { type: "string", description: "stable id of the spending agent (per-agent daily ledger)" },
-        amount: { type: "number", description: "proposed spend amount" },
-        destination: { type: "string", description: "optional payee / merchant identifier checked against allowlists" },
-        policy: { description: "preset name (conservative|standard|permissive) or inline policy object", type: "string" },
-        wait: { type: "boolean", description: "if the verdict is 'review', block until a human approves/denies on Telegram (default 120s timeout)" },
+  let guardDiscovery;
+  let verifyDiscovery;
+  if (DISCOVERY_ENABLED) {
+    const {
+      bazaarResourceServerExtension,
+      declareDiscoveryExtension,
+    } = require("@x402/extensions/bazaar");
+    cdpResourceServer.registerExtension(bazaarResourceServerExtension);
+
+    // Bazaar semantic search ranks on description + schema quality; these are
+    // the listing copy, not just docs. POST routes carry full discovery
+    // metadata; GET mirrors exist for probes and are not declared discoverable.
+    guardDiscovery = declareDiscoveryExtension({
+      method: "POST",
+      input: { agent_id: "agent-7", amount: 150, destination: "merchant-x", policy: "standard" },
+      inputSchema: {
+        properties: {
+          agent_id: { type: "string", description: "stable id of the spending agent (per-agent daily ledger)" },
+          amount: { type: "number", description: "proposed spend amount" },
+          destination: { type: "string", description: "optional payee / merchant identifier checked against allowlists" },
+          policy: { description: "preset name (conservative|standard|permissive) or inline policy object", type: "string" },
+          wait: { type: "boolean", description: "if the verdict is 'review', block until a human approves/denies on Telegram (default 120s timeout)" },
+        },
+        required: ["agent_id", "amount"],
       },
-      required: ["agent_id", "amount"],
-    },
-    bodyType: "json",
-    output: {
-      example: {
-        verdict: "review",
-        triggered: ["review_threshold"],
-        reasons: ["amount 150 exceeds review threshold 100"],
-        approval_id: "apr_9f2c1a",
-        poll: "/v1/approvals/apr_9f2c1a",
+      bodyType: "json",
+      output: {
+        example: {
+          verdict: "review",
+          triggered: ["review_threshold"],
+          reasons: ["amount 150 exceeds review threshold 100"],
+          approval_id: "apr_9f2c1a",
+          poll: "/v1/approvals/apr_9f2c1a",
+        },
       },
-    },
-  });
-  const verifyDiscovery = declareDiscoveryExtension({
-    method: "POST",
-    input: { token: "<base64url capability token>", presenter: "worker-agent" },
-    inputSchema: {
-      properties: {
-        token: { type: "string", description: "capability token (macaroon-style HMAC chain, base64url)" },
-        presenter: { type: "string", description: "optional audience check: who is presenting this token" },
+    });
+    verifyDiscovery = declareDiscoveryExtension({
+      method: "POST",
+      input: { token: "<base64url capability token>", presenter: "worker-agent" },
+      inputSchema: {
+        properties: {
+          token: { type: "string", description: "capability token (macaroon-style HMAC chain, base64url)" },
+          presenter: { type: "string", description: "optional audience check: who is presenting this token" },
+        },
+        required: ["token"],
       },
-      required: ["token"],
-    },
-    bodyType: "json",
-    output: {
-      example: { valid: true, context: { subject: "root-agent", scopes: ["payments:read"], depth: 1 } },
-    },
-  });
+      bodyType: "json",
+      output: {
+        example: { valid: true, context: { subject: "root-agent", scopes: ["payments:read"], depth: 1 } },
+      },
+    });
+  }
 
   const guardDesc =
     "Spend-policy verdict for AI agents: POST a proposed spend, get allow/review/deny " +
@@ -893,7 +900,7 @@ if (CDP_ENABLED) {
       serviceName: "Claw-in-a-Box",
       iconUrl: process.env.SERVICE_ICON_URL || "https://clawinabox.xyz/logo-256-white.png",
       tags: ["infra", "ai-agents", "spend-guard", "policy", "human-in-the-loop", "authorization"],
-      extensions: guardDiscovery,
+      ...(guardDiscovery ? { extensions: guardDiscovery } : {}),
     },
     "GET /paid/v1/guard/check": {
       accepts: cdpAccepts,
@@ -907,7 +914,7 @@ if (CDP_ENABLED) {
       serviceName: "Claw-in-a-Box",
       iconUrl: process.env.SERVICE_ICON_URL || "https://clawinabox.xyz/logo-256-white.png",
       tags: ["infra", "ai-agents", "capability-tokens", "delegation", "revocation", "authorization"],
-      extensions: verifyDiscovery,
+      ...(verifyDiscovery ? { extensions: verifyDiscovery } : {}),
     },
     "GET /paid/v1/tokens/verify": {
       accepts: cdpAccepts,
@@ -1177,6 +1184,7 @@ app.get("/healthz", (req, res) => {
       cdp_x402_enabled: CDP_ENABLED,
       cdp_keys_set: Boolean(CDP.keyId && CDP.keySecret),
       cdp_x402_ready: cdpReady,
+      cdp_discovery_enabled: DISCOVERY_ENABLED,
       cdp_network: CDP.network,
       api_host: API_HOST,
       persistence: persistence.state,

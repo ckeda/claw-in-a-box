@@ -393,7 +393,7 @@ async function main() {
   const seed = keys.privateKey.export({ format: "der", type: "pkcs8" }).subarray(-32);
   const publicKey = keys.publicKey.export({ format: "der", type: "spki" }).subarray(-32);
   const cdpDb = path.join(temp, "cdp.json");
-  server = boot({
+  const cdpEnv = {
     PAYMENT_MODE: "off",
     API_HOST: "api.test",
     PERSISTENCE: "on",
@@ -402,12 +402,38 @@ async function main() {
     CDP_API_KEY_SECRET: Buffer.concat([seed, publicKey]).toString("base64"),
     CDP_PAY_TO: "0x0361af173cae66337f3f05abdbb2b68e5c88ccfd",
     CDP_FACILITATOR_URL: "http://127.0.0.1:9922",
-  }, 8836);
-  await waitCdpReady(8836);
+  };
+
+  // Discovery defaults on for mainnet. Assert that contract before testing
+  // the permanent staging override below.
+  server = boot(cdpEnv, 8838);
+  await waitCdpReady(8838);
   try {
-    let response = await hostRequest(8836, "/paid/v1/agents/claim", { agent_id: "cdp-claim" });
+    let response = await hostRequest(8838, "/paid/v1/guard/check", { agent_id: "discovery-default", amount: 1 });
     const required = response.headers["payment-required"];
     const envelope = required ? JSON.parse(Buffer.from(required, "base64").toString("utf8")) : null;
+    const health = await waitReady(8838, true);
+    ok("DISCOVERY defaults on and declares Bazaar metadata",
+      health.features?.cdp_discovery_enabled === true && Boolean(envelope?.extensions?.bazaar));
+  } finally { await stop(server); }
+
+  server = boot({ ...cdpEnv, DISCOVERY: "off" }, 8836);
+  await waitCdpReady(8836);
+  try {
+    const health = await waitReady(8836, true);
+    let response = await hostRequest(8836, "/paid/v1/guard/check", { agent_id: "staging-no-discovery", amount: 1 });
+    let required = response.headers["payment-required"];
+    let envelope = required ? JSON.parse(Buffer.from(required, "base64").toString("utf8")) : null;
+    const accepts = envelope?.accepts?.[0];
+    ok("DISCOVERY=off keeps a valid CDP 402 with no discovery declaration",
+      health.features?.cdp_discovery_enabled === false && response.status === 402 &&
+      envelope?.x402Version === 2 && accepts?.scheme === "exact" &&
+      accepts?.network === "eip155:8453" &&
+      (!envelope.extensions || Object.keys(envelope.extensions).length === 0));
+
+    response = await hostRequest(8836, "/paid/v1/agents/claim", { agent_id: "cdp-claim" });
+    required = response.headers["payment-required"];
+    envelope = required ? JSON.parse(Buffer.from(required, "base64").toString("utf8")) : null;
     ok("CDP claim route challenges on Base", response.status === 402 && envelope?.accepts?.[0]?.network === "eip155:8453",
       `status=${response.status} body=${response.text}`);
     if (!envelope) throw new Error("CDP claim challenge missing PAYMENT-REQUIRED");
