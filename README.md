@@ -23,7 +23,7 @@ Project home: **https://clawinabox.xyz** · Live API:
 
 Marketplace listings:
 
-- [ClawGuard on OKX.AI](https://www.okx.ai/agents/5854) — USDT0 on X Layer through the official OKX x402 SDK
+- [Claw-in-a-Box on OKX.AI](https://www.okx.ai/agents/5854) — USDT0 on X Layer through the official OKX x402 SDK
 - [Claw-in-a-Box on Agentic.Market](https://agentic.market/services/api-clawinabox-xyz) — USDC on Base through the Coinbase/x402 Bazaar rail
 
 ## System architecture
@@ -409,28 +409,6 @@ The service history through v0.8.0 documents the production context and must
 not be presented as work created during the Build Week Codex session. The
 submission history starts with the Console branch and continues with only the
 v0.8.1+ increments authored and reviewed after that baseline.
-
-### Build Week scope and submission map
-
-> **OpenAI Build Week scope — Developer Tools.** The submission is Claw
-> Console, plus any v0.8.1+ security and persistence increments authored with
-> Codex + GPT-5.6 during the recorded core-build session. The v0.1–v0.8.0
-> service line predates that session: its v0.7.5 mainnet deployment and v0.8.0
-> staging baseline are the existing x402 infrastructure the new work operates
-> on, and are not claimed as Build Week work.
->
-> Codex `/feedback` core-build session:
-> `019f75a2-5efc-70e1-818e-2514176abc6a`.
-
-| Deliverable | Source | Review and deployment status |
-|---|---|---|
-| Operator Console | [`agent/console-build-week`](https://github.com/ckeda/claw-in-a-box/tree/agent/console-build-week) · [Draft PR #1](https://github.com/ckeda/claw-in-a-box/pull/1) | Built from scratch for Build Week; frozen contest build at [console.clawinabox.xyz](https://console.clawinabox.xyz) |
-| v0.8.1 “Locks” | [`agent/v0.8.1`](https://github.com/ckeda/claw-in-a-box/tree/agent/v0.8.1) · [Draft PR #2](https://github.com/ckeda/claw-in-a-box/pull/2) | Independently reviewed and staging-accepted |
-| v0.9.0 “Face” | [`agent/v0.9.0`](https://github.com/ckeda/claw-in-a-box/tree/agent/v0.9.0) · [Draft PR #3](https://github.com/ckeda/claw-in-a-box/pull/3) | Independently reviewed, owner-accepted, and live on permanent staging at [test.clawinabox.xyz](https://test.clawinabox.xyz) |
-
-For exact Codex/owner attribution, commits, test counts, and artifact hashes,
-read the [Codex/GPT-5.6 self-summary](https://github.com/ckeda/claw-in-a-box/blob/agent/v0.9.0/docs/GPT-BUILD-WEEK-SELF-SUMMARY.md).
-**Boundary:** v0.1–v0.8.0 is pre-existing infrastructure, not submission work.
 
 ## License
 
