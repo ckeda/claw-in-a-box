@@ -49,7 +49,7 @@
 - Status page reflects merged single-instance topology; dual-marketplace copy
 
 ## v0.7.1 — migration (2026-07-15)
-- Host-independent OKX rail at `/paid-okx/v1/*` (OKX.AI listing "ClawGuard" live on the new endpoint)
+- Host-independent OKX rail at `/paid-okx/v1/*` (OKX.AI listing live on the new endpoint, listed then as "ClawGuard", since renamed "Claw-in-a-Box")
 - Bazaar `iconUrl` metadata
 
 ## v0.7.0 — "Dual rail" (2026-07-15)

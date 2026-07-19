@@ -175,7 +175,7 @@ export default function Dashboard() {
         </div>
         <div className="market-links">
           <a href="https://www.okx.ai/agents/5854" target="_blank" rel="noreferrer">
-            <span>OKX.AI</span><strong>ClawGuard ↗</strong>
+            <span>OKX.AI</span><strong>Claw-in-a-Box ↗</strong>
           </a>
           <a href="https://agentic.market/services/api-clawinabox-xyz" target="_blank" rel="noreferrer">
             <span>x402 Bazaar</span><strong>Agentic.Market ↗</strong>
