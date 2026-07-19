@@ -33,13 +33,18 @@ const post = (port, route, body, headers = {}) => fetch(`http://127.0.0.1:${port
   body: JSON.stringify(body),
 });
 
-const hostRequest = (port, route, body, headers = {}) => new Promise((resolve, reject) => {
+const get = (port, route, headers = {}) => fetch(`http://127.0.0.1:${port}${route}`, {
+  headers,
+});
+
+const hostRequest = (port, route, body, headers = {}, method = "POST") => new Promise((resolve, reject) => {
+  const hasBody = body !== undefined;
   const request = http.request({
     host: "127.0.0.1",
     port,
-    method: "POST",
+    method,
     path: route,
-    headers: { host: "api.test", "content-type": "application/json", ...headers },
+    headers: { host: "api.test", ...(hasBody ? { "content-type": "application/json" } : {}), ...headers },
   }, (response) => {
     let text = "";
     response.on("data", (chunk) => { text += chunk; });
@@ -51,7 +56,7 @@ const hostRequest = (port, route, body, headers = {}) => new Promise((resolve, r
     }));
   });
   request.on("error", reject);
-  request.end(JSON.stringify(body));
+  request.end(hasBody ? JSON.stringify(body) : undefined);
 });
 
 async function waitReady(port, requireDb = false) {
@@ -164,11 +169,40 @@ async function main() {
   let pendingApprovalId;
   let revokedToken;
   try {
+    let response = await get(8831, "/paid/v1/agents/claim");
+    let required = response.headers.get("payment-required");
+    let envelope = required ? JSON.parse(Buffer.from(required, "base64").toString("utf8")) : null;
+    ok("GET claim discovery probe without payment -> 402", response.status === 402 && Boolean(envelope?.accepts?.[0]));
+    const settledBeforePaidGet = facilitator.hits.settle;
+    response = await get(8831, "/paid/v1/agents/claim", paymentHeader(envelope.accepts[0]));
+    const invalidPaidGet = await response.json();
+    await delay(100);
+    const healthAfterPaidGet = await (await get(8831, "/healthz")).json();
+    ok("paid GET claim rejects missing agent_id before settlement",
+      response.status === 400 && invalidPaidGet.error === "missing_field" &&
+      facilitator.hits.settle === settledBeforePaidGet && healthAfterPaidGet.memory?.claimed_agents === 0,
+      `status=${response.status} settle=${facilitator.hits.settle} claimed=${healthAfterPaidGet.memory?.claimed_agents}`);
+
+    response = await get(8831, "/paid-okx/v1/agents/claim");
+    required = response.headers.get("payment-required");
+    envelope = required ? JSON.parse(Buffer.from(required, "base64").toString("utf8")) : null;
+    ok("GET /paid-okx claim discovery probe without payment -> 402",
+      response.status === 402 && Boolean(envelope?.accepts?.[0]));
+    const settledBeforeMirrorPaidGet = facilitator.hits.settle;
+    response = await get(8831, "/paid-okx/v1/agents/claim", paymentHeader(envelope.accepts[0]));
+    const invalidMirrorPaidGet = await response.json();
+    await delay(100);
+    const healthAfterMirrorPaidGet = await (await get(8831, "/healthz")).json();
+    ok("paid GET /paid-okx claim rejects before settlement",
+      response.status === 400 && invalidMirrorPaidGet.error === "missing_field" &&
+      facilitator.hits.settle === settledBeforeMirrorPaidGet && healthAfterMirrorPaidGet.memory?.claimed_agents === 0,
+      `status=${response.status} settle=${facilitator.hits.settle} claimed=${healthAfterMirrorPaidGet.memory?.claimed_agents}`);
+
     const claimChallenge = await challenge(8831, "/paid/v1/agents/claim");
     ok("claim without payment -> 402", claimChallenge.response.status === 402);
     const header = paymentHeader(claimChallenge.envelope.accepts[0]);
 
-    let response = await post(8831, "/paid/v1/agents/claim", { agent_id: "alpha" }, header);
+    response = await post(8831, "/paid/v1/agents/claim", { agent_id: "alpha" }, header);
     const firstClaim = await response.json();
     alphaSecret = firstClaim.agent_secret;
     ok("claim first call -> 201 + 32-byte base64url secret", response.status === 201 && /^[A-Za-z0-9_-]{43}$/.test(alphaSecret || ""));
@@ -377,15 +411,22 @@ async function main() {
 
   // The API host's primary CDP/Base rail must carry the same claim contract.
   const cdpPayer = "0x4444444444444444444444444444444444444444";
+  const cdpHits = { verify: 0, settle: 0 };
   const cdpFacilitator = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     if (req.url.endsWith("/supported")) return res.end(JSON.stringify({ kinds: [
       { x402Version: 2, scheme: "exact", network: "eip155:8453" },
     ] }));
-    if (req.url.endsWith("/verify")) return res.end(JSON.stringify({ isValid: true, payer: cdpPayer }));
-    if (req.url.endsWith("/settle")) return res.end(JSON.stringify({
-      success: true, transaction: `0x${"cd".repeat(32)}`, network: "eip155:8453", payer: cdpPayer,
-    }));
+    if (req.url.endsWith("/verify")) {
+      cdpHits.verify++;
+      return res.end(JSON.stringify({ isValid: true, payer: cdpPayer }));
+    }
+    if (req.url.endsWith("/settle")) {
+      cdpHits.settle++;
+      return res.end(JSON.stringify({
+        success: true, transaction: `0x${"cd".repeat(32)}`, network: "eip155:8453", payer: cdpPayer,
+      }));
+    }
     res.statusCode = 404;
     res.end("{}");
   }).listen(9922);
@@ -430,6 +471,22 @@ async function main() {
       envelope?.x402Version === 2 && accepts?.scheme === "exact" &&
       accepts?.network === "eip155:8453" &&
       (!envelope.extensions || Object.keys(envelope.extensions).length === 0));
+
+    response = await hostRequest(8836, "/paid/v1/agents/claim", undefined, {}, "GET");
+    required = response.headers["payment-required"];
+    envelope = required ? JSON.parse(Buffer.from(required, "base64").toString("utf8")) : null;
+    ok("CDP GET claim discovery probe without payment -> 402",
+      response.status === 402 && envelope?.accepts?.[0]?.network === "eip155:8453");
+    const cdpSettleBeforePaidGet = cdpHits.settle;
+    response = await hostRequest(8836, "/paid/v1/agents/claim", undefined,
+      paymentHeader(envelope.accepts[0]), "GET");
+    const invalidCdpPaidGet = response.json();
+    await delay(100);
+    const cdpHealthAfterPaidGet = await waitReady(8836, true);
+    ok("paid CDP GET claim rejects missing agent_id before settlement",
+      response.status === 400 && invalidCdpPaidGet.error === "missing_field" &&
+      cdpHits.settle === cdpSettleBeforePaidGet && cdpHealthAfterPaidGet.memory?.claimed_agents === 0,
+      `status=${response.status} settle=${cdpHits.settle} claimed=${cdpHealthAfterPaidGet.memory?.claimed_agents}`);
 
     response = await hostRequest(8836, "/paid/v1/agents/claim", { agent_id: "cdp-claim" });
     required = response.headers["payment-required"];

@@ -705,6 +705,11 @@ if (PAYMENT_MODE === "okx-x402") {
       description: "Pay-to-Claim an agent_id and receive its one-time agent secret",
       mimeType: "application/json",
     },
+    "GET /paid/v1/agents/claim": {
+      accepts,
+      description: "Pay-to-Claim an agent_id (POST JSON to this path)",
+      mimeType: "application/json",
+    },
     // v0.7.1: host-independent OKX-rail mirrors. The api host routes /paid/*
     // to the CDP layer, so the OKX listing endpoint moves to /paid-okx/* -
     // same handlers, same accepts (X Layer / USDT0), reachable on any host.
@@ -731,6 +736,11 @@ if (PAYMENT_MODE === "okx-x402") {
     "POST /paid-okx/v1/agents/claim": {
       accepts,
       description: "Pay-to-Claim an agent_id and receive its one-time agent secret",
+      mimeType: "application/json",
+    },
+    "GET /paid-okx/v1/agents/claim": {
+      accepts,
+      description: "Pay-to-Claim an agent_id (POST JSON to this path)",
       mimeType: "application/json",
     },
   });
@@ -928,6 +938,11 @@ if (CDP_ENABLED) {
       serviceName: "Claw-in-a-Box",
       iconUrl: process.env.SERVICE_ICON_URL || "https://clawinabox.xyz/logo-256-white.png",
       tags: ["infra", "ai-agents", "identity", "pay-to-claim", "authorization"],
+    },
+    "GET /paid/v1/agents/claim": {
+      accepts: cdpAccepts,
+      description: "Pay-to-Claim an agent_id (POST JSON to this path)",
+      mimeType: "application/json",
     },
   });
 
@@ -1443,6 +1458,7 @@ app.post("/paid/v1/tokens/verify", (req, res) => {
 });
 app.get("/paid/v1/tokens/verify", paidRouteInfo);
 app.post("/paid/v1/agents/claim", claimHandler);
+app.get("/paid/v1/agents/claim", claimHandler);
 // v0.7.1 OKX-rail mirrors (payment enforced by the OKX SDK middleware above)
 app.post("/paid-okx/v1/guard/check", guardCheckHandler);
 app.get("/paid-okx/v1/guard/check", paidRouteInfo);
@@ -1455,6 +1471,7 @@ app.post("/paid-okx/v1/tokens/verify", (req, res) => {
 });
 app.get("/paid-okx/v1/tokens/verify", paidRouteInfo);
 app.post("/paid-okx/v1/agents/claim", claimHandler);
+app.get("/paid-okx/v1/agents/claim", claimHandler);
 
 app.post("/v1/agents/rotate", rateLimit, async (req, res, next) => {
   if (!persistence.hardReady()) {
