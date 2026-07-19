@@ -1,4 +1,12 @@
-# OpenAI Build Week — honest implementation summary
+# OpenAI Build Week — Codex/GPT-5.6 self-summary
+
+> **Authorship note:** This summary is written by Codex (GPT-5.6), the AI
+> coding agent that implemented the Build Week work, in its own voice—every
+> “I” below refers to Codex, not to the repository owner. The owner (`ckeda`,
+> Keda) directed the project, adjudicated design decisions, performed deploys
+> and human approvals, and did not author this document's claims. Commit
+> metadata shows `ckeda` because the shared workspace uses the owner's Git
+> identity.
 
 ## Scope boundary
 
@@ -161,27 +169,33 @@ spend ledger, recovery scope/rates, key rotation, and operator mutations.
 
 The test counts come directly from the checked-in test files:
 
-| suite | checks |
-|---|---:|
-| pre-existing baseline, `service/test-v2.js` | 38 |
-| Build Week v0.8.1, `service/test-v081.js` | 77 |
-| Build Week v0.9.0, `service/test-v09.js` | 43 |
-| complete server matrix | 158 |
-| Console Vitest suite | 20 |
+| suite | named call sites | runtime assertions |
+|---|---:|---:|
+| pre-existing baseline, `service/test-v2.js` | 38 | 38 |
+| Build Week v0.8.1, `service/test-v081.js` | 77 | 86 |
+| Build Week v0.9.0, `service/test-v09.js` | 43 | 43 |
+| complete server matrix | 158 | 167 |
+| Console Vitest suite | 20 | 20 |
 
-I ran the complete 158-check server matrix and the 20-test Console suite on
-Node 18.20.8 and Node 22.23.1; the Console production build passed on both.
-The Node-18-critical `jose` dependency remains on v5 through the package
-override.
+The distinction matters because nine v0.8.1 assertions execute from shared
+loops: static `ok()` call-site counting reports 77, while `node test-all.js`
+prints 86 v0.8.1 PASS lines. The reproducible headline is therefore **167
+server runtime assertions plus 20 Console tests** (158 named server cases).
+I ran the complete matrix on Node 18.20.8 and Node 22.23.1; the independent
+reviewer confirmed the 167 runtime total on Node 20 and Node 22. The Console
+production build passed. The Node-18-critical `jose` dependency remains on v5
+through the package override.
 
 The owner controls merge-facing actions, deployment, Telegram, wallets, and
 Hostinger. v0.8.1 passed the owner's independent sandbox re-review and the real
-restart-survival staging acceptance on `test.clawinabox.xyz`. v0.9.0 is still a
-Draft PR checkpoint: its local Node 18/22 matrix is green, but its independent
-sandbox re-review and human staging deployment must not be described as complete
-until the owner reports those gates passed. GitHub currently records no formal
-review objects on the three Draft PRs; the review/adjudication record lives in
-the owner/Codex task log.
+restart-survival staging acceptance on `test.clawinabox.xyz`. v0.9.0 has now
+passed independent review, is deployed to that permanent staging host, and has
+passed the owner's manual acceptance for contract invariants, the access model,
+and the wallet-recovery loop. Draft PR #3 intentionally remains open: mainnet
+is frozen through the July 21 submission, merge follows the mainnet promotion
+chain, and `console.clawinabox.xyz` remains frozen. GitHub currently records no
+formal review objects on the three Draft PRs; the independent review and owner
+adjudication record lives in the owner/Codex task log.
 
 ## Reproducible references
 
