@@ -10,13 +10,20 @@
 > with the Console below and includes only later server increments authored with
 > Codex + GPT-5.6 in the recorded core-build session.
 
-## Unreleased — Claw Console (OpenAI Build Week)
+## v0.9.0 — "Face" (unreleased staging candidate)
 - Static browser-only operator workbench in `console/`
 - Live Dashboard, Verdict Lab, Approval timeline, Token Workbench, Telegram binding helper and policy cards
 - Client-side free-endpoint allowlist blocks paid and unknown routes before `fetch`
 - Polite health/approval/binding polling with explicit `429` backoff
 - Bounded localStorage history and token state; no accounts or server-side keys
 - Responsive Claw-in-a-Box design system and static-host-compatible hash navigation
+- Added operator-only `GET /v1/approvals`, agent-secret-scoped `GET /v1/agents/:id/spend`, and public aggregate-only `GET /v1/metrics`; every read fails closed without a connected, hydrated `PERSISTENCE=on` database
+- Added a PII-minimized, observational last-50 spend ledger with 90-day retention; it is fire-and-forget and never authorizes spend
+- Added EOA/EIP-191 wallet-signature secret recovery with domain-bound, hash-at-rest, five-minute, one-use nonces; contract/custodial wallets use manual operator recovery
+- Added constant-time operator bearer auth, env-tunable recovery throttles, informational rate-limit headers, and duplicate-claim race normalization to 409
+- Console v0.9 wires approval feed, spend history, aggregate metrics, strict mode, authenticated rebinding, and injected-wallet recovery while hard-blocking all paid routes
+- Operator credentials are sessionStorage/in-memory only; agent-owner credentials may use localStorage; CSP contains no third-party runtime source
+- Added `llms.txt`, v0.9 staging acceptance material, and Node 18/22 integration coverage
 
 ## v0.8.1 — "Locks" (unreleased staging candidate)
 - Pay-to-Claim (PTC): paid-only `POST /paid/v1/agents/claim` plus `/paid-okx` mirror, one-time 256-bit `agent_secret`, SHA-256-at-rest, and settlement payer recorded as `claimed_by`

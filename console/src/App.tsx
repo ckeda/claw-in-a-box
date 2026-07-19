@@ -7,16 +7,20 @@ import Approvals from "./pages/Approvals";
 import TokenWorkbench from "./pages/TokenWorkbench";
 import TelegramBinding from "./pages/TelegramBinding";
 import Policies from "./pages/Policies";
+import Spend from "./pages/Spend";
+import Access from "./pages/Access";
 
-export type RouteId = "dashboard" | "verdict" | "approvals" | "tokens" | "telegram" | "policies";
+export type RouteId = "dashboard" | "verdict" | "approvals" | "spend" | "tokens" | "telegram" | "policies" | "access";
 
 const ROUTES: { id: RouteId; label: string; mark: string }[] = [
   { id: "dashboard", label: "Dashboard", mark: "01" },
   { id: "verdict", label: "Verdict Lab", mark: "02" },
   { id: "approvals", label: "Approvals", mark: "03" },
-  { id: "tokens", label: "Token Workbench", mark: "04" },
-  { id: "telegram", label: "Telegram Binding", mark: "05" },
-  { id: "policies", label: "Policies", mark: "06" },
+  { id: "spend", label: "Spend", mark: "04" },
+  { id: "tokens", label: "Token Workbench", mark: "05" },
+  { id: "telegram", label: "Telegram Binding", mark: "06" },
+  { id: "policies", label: "Policies", mark: "07" },
+  { id: "access", label: "Access & Recovery", mark: "08" },
 ];
 
 function routeFromHash(): RouteId {
@@ -55,8 +59,10 @@ export default function App() {
       );
     }
     if (route === "approvals") return <Approvals initialApprovalId={activeApprovalId} />;
+    if (route === "spend") return <Spend />;
     if (route === "tokens") return <TokenWorkbench />;
     if (route === "telegram") return <TelegramBinding />;
+    if (route === "access") return <Access />;
     return (
       <Policies
         onUsePolicy={(policy) => {
@@ -103,7 +109,7 @@ export default function App() {
           type="button"
           className="clear-data"
           onClick={() => {
-            if (window.confirm("Clear this browser’s Console history, tokens, and preferences?")) {
+            if (window.confirm("Clear this browser’s Console history, tokens, preferences, and credential slots?")) {
               clearConsoleData();
               window.location.reload();
             }

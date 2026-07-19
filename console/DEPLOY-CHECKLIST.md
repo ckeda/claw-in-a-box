@@ -1,7 +1,12 @@
-# Console static-publication checklist
+# Frozen Phase 0 Console static-publication checklist
 
 The human publishes this site. Do not deploy or restart the API service as part
 of this checklist.
+
+This checklist documents the already-live hackathon build. Do not use it to
+publish the v0.9 repository Console to `console.clawinabox.xyz`; that domain is
+frozen until the owner gives explicit post-judging approval. v0.9 staging
+acceptance lives in `../deploy-v0.9.0-staging-CHECKLIST.md`.
 
 ## Build gate
 
@@ -54,7 +59,7 @@ and `#policies` must work.
 - [ ] Video audio specifically names Codex-accelerated work, owner decisions, GPT-5.6, and the core-build session ID—never generic “built with AI” wording
 - [ ] Public YouTube URL works without sign-in
 
-## Explicitly out of scope
+## Explicitly out of scope for this frozen publication
 
 - Mainnet v0.8 promotion
 - Shortening the persistence shadow-observation window

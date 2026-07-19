@@ -13,10 +13,12 @@ const { LANDING_HTML } = require("./landing");
 const { mountStatus } = require("./status");
 const persistence = require("./storage");
 const fs = require("node:fs");
+const { recoverMessageAddress } = require("viem");
 
 const PORT = Number(process.env.PORT || 8787);
 const SECRET = Buffer.from(process.env.GUARD_SECRET || "claw-in-a-box-dev-secret");
 const DEFAULT_TTL_S = 3600;
+const OPERATOR_BEARER_KEY = process.env.OPERATOR_BEARER_KEY || "";
 
 // ── Telegram HITL (all optional; unset = feature off, behavior unchanged) ──
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
@@ -53,6 +55,35 @@ function secretsEqual(presented, expectedHash) {
   return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
 }
 
+function bearerKeysEqual(presented, expected) {
+  const candidate = crypto.createHash("sha256").update(String(presented), "utf8").digest();
+  const configured = crypto.createHash("sha256").update(String(expected), "utf8").digest();
+  return crypto.timingSafeEqual(candidate, configured);
+}
+
+function requireOperator(req, res, next) {
+  if (!persistence.hardReady()) {
+    return res.status(503).json({
+      error: "feature_disabled",
+      detail: "operator reads require PERSISTENCE=on and a connected, hydrated database",
+    });
+  }
+  if (!OPERATOR_BEARER_KEY) {
+    return res.status(503).json({
+      error: "feature_disabled",
+      detail: "operator access is not configured",
+    });
+  }
+  const authorization = String(req.get("authorization") || "");
+  const match = /^Bearer ([^\s]+)$/.exec(authorization);
+  const presented = match ? match[1] : "";
+  if (!presented || !bearerKeysEqual(presented, OPERATOR_BEARER_KEY)) {
+    res.set("WWW-Authenticate", "Bearer");
+    return res.status(401).json({ error: "unauthorized", detail: "a valid operator bearer key is required" });
+  }
+  return next();
+}
+
 function payersEqual(verifiedPayer, settlementPayer) {
   const verified = String(verifiedPayer || "").trim();
   const settledPayer = String(settlementPayer || "").trim();
@@ -83,6 +114,16 @@ function newBindCode() {
   return crypto.randomBytes(4).toString("hex").toUpperCase(); // 8 hex chars
 }
 const APPROVAL_TIMEOUT_S = Number(process.env.APPROVAL_TIMEOUT_S || 120);
+
+const RECOVERY_TTL_MS = Number(process.env.RECOVERY_TTL_MS || 5 * 60 * 1000);
+const RECOVERY_RATE_WINDOW_MS = Number(process.env.RECOVERY_RATE_WINDOW_MS || 60 * 60 * 1000);
+const RECOVERY_ISSUE_IP_MAX = Number(process.env.RECOVERY_ISSUE_IP_MAX || 5);
+const RECOVERY_ISSUE_AGENT_MAX = Number(process.env.RECOVERY_ISSUE_AGENT_MAX || 3);
+const RECOVERY_VERIFY_IP_MAX = Number(process.env.RECOVERY_VERIFY_IP_MAX || 10);
+const recoveryIssueIpHits = new Map();
+const recoveryIssueAgentHits = new Map();
+const recoveryVerifyIpHits = new Map();
+let metricsCache = { expiresAt: 0, body: null };
 
 // ── x402 pay-per-call (mounted only on /paid/* mirror routes) ──────────────
 // PAYMENT_MODE: "off" (default) | "mock-x402" (demo) | "okx-x402" (production)
@@ -340,8 +381,10 @@ function guardCheck(body) {
   }
 
   if (verdict === "allow") {
-    dailySpend.set(agentId, { day, spent: spentToday + amount });
-    persistence.saveSpend(agentId, day, spentToday + amount);
+    const spentAfter = spentToday + amount;
+    dailySpend.set(agentId, { day, spent: spentAfter });
+    persistence.saveSpend(agentId, day, spentAfter);
+    persistence.saveSpendChange(agentId, day, amount, spentAfter, "guard_allow");
     reasons.push("all rules satisfied");
   }
   return {
@@ -396,6 +439,14 @@ function expireVerdict(verdict) {
       current.spent = Math.max(0, current.spent - verdict.amount);
       dailySpend.set(verdict.agent_id, current);
       persistence.saveSpend(verdict.agent_id, current.day, current.spent);
+      persistence.saveSpendChange(
+        verdict.agent_id,
+        current.day,
+        -verdict.amount,
+        current.spent,
+        "verdict_expired_refund",
+        verdict.id
+      );
       refunded = true;
     }
   }
@@ -416,6 +467,14 @@ function chargeApprovedVerdict(approval) {
   const spent = current && current.day === day ? current.spent : 0;
   dailySpend.set(agentId, { day, spent: spent + amount });
   persistence.saveSpend(agentId, day, spent + amount);
+  persistence.saveSpendChange(
+    agentId,
+    day,
+    amount,
+    spent + amount,
+    "human_approved",
+    approval.id
+  );
   return issueVerdict(agentId, amount, day);
 }
 
@@ -985,6 +1044,7 @@ const MAX_SETTLED = Number(process.env.MAX_SETTLED || 10000);
 const MAX_SPEND_ROWS = Number(process.env.MAX_SPEND_ROWS || 20000);
 const MAX_BINDINGS = Number(process.env.MAX_BINDINGS || 5000);
 const APPROVAL_KEEP_MS = Number(process.env.APPROVAL_KEEP_MS || 30 * 60 * 1000);
+const SPEND_LEDGER_RETENTION_DAYS = Number(process.env.SPEND_LEDGER_RETENTION_DAYS || 90);
 
 function trimSet(set, max) {
   if (set.size <= max) return 0;
@@ -1020,6 +1080,10 @@ function sweep() {
     }
   }
   persistence.purgeOldSpend(today);
+  persistence.purgeSpendLedger(
+    Math.floor((now - SPEND_LEDGER_RETENTION_DAYS * 24 * 60 * 60 * 1000) / 1000)
+  );
+  persistence.purgeRecoveryNonces(now);
 
   for (const [id, verdict] of verdicts) {
     expireVerdict(verdict);
@@ -1086,8 +1150,12 @@ const RATE_WINDOW_MS = Number(process.env.RATE_WINDOW_MS || 60000);
 const RATE_MAX = Number(process.env.RATE_MAX || 60);
 const hits = new Map();
 
+function requestIp(req) {
+  return String(req.get("x-forwarded-for") || req.ip || "?").split(",")[0].trim();
+}
+
 function rateLimit(req, res, next) {
-  const ip = String(req.get("x-forwarded-for") || req.ip || "?").split(",")[0].trim();
+  const ip = requestIp(req);
   const now = Date.now();
   let h = hits.get(ip);
   if (!h || now > h.resetAt) {
@@ -1095,8 +1163,14 @@ function rateLimit(req, res, next) {
     hits.set(ip, h);
   }
   h.count++;
+  const resetSeconds = Math.max(0, Math.ceil((h.resetAt - now) / 1000));
+  res.set({
+    "RateLimit-Limit": String(RATE_MAX),
+    "RateLimit-Remaining": String(Math.max(0, RATE_MAX - h.count)),
+    "RateLimit-Reset": String(resetSeconds),
+  });
   if (h.count > RATE_MAX) {
-    res.set("Retry-After", String(Math.ceil((h.resetAt - now) / 1000)));
+    res.set("Retry-After", String(resetSeconds));
     return res.status(429).json({
       error: "rate_limited",
       detail: `over ${RATE_MAX} requests per ${RATE_WINDOW_MS / 1000}s from this address`,
@@ -1104,9 +1178,54 @@ function rateLimit(req, res, next) {
   }
   next();
 }
+
+function hitRecoveryWindow(map, key, maximum, now) {
+  let entry = map.get(key);
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + RECOVERY_RATE_WINDOW_MS };
+    map.set(key, entry);
+  }
+  entry.count++;
+  return {
+    allowed: entry.count <= maximum,
+    maximum,
+    remaining: Math.max(0, maximum - entry.count),
+    resetSeconds: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+  };
+}
+
+function enforceRecoveryRate(req, res, phase, agentId) {
+  const now = Date.now();
+  const ip = requestIp(req);
+  const results = phase === "issue"
+    ? [
+        hitRecoveryWindow(recoveryIssueIpHits, ip, RECOVERY_ISSUE_IP_MAX, now),
+        hitRecoveryWindow(recoveryIssueAgentHits, agentId, RECOVERY_ISSUE_AGENT_MAX, now),
+      ]
+    : [hitRecoveryWindow(recoveryVerifyIpHits, ip, RECOVERY_VERIFY_IP_MAX, now)];
+  const blocked = results.filter((result) => !result.allowed);
+  if (blocked.length === 0) return true;
+  const retryAfter = Math.max(...blocked.map((result) => result.resetSeconds));
+  const tightest = blocked.sort((a, b) => a.maximum - b.maximum)[0];
+  res.set({
+    "Retry-After": String(retryAfter),
+    "RateLimit-Limit": String(tightest.maximum),
+    "RateLimit-Remaining": "0",
+    "RateLimit-Reset": String(retryAfter),
+  });
+  res.status(429).json({
+    error: "rate_limited",
+    detail: "agent recovery rate limit exceeded",
+  });
+  return false;
+}
+
 setInterval(() => {
   const now = Date.now();
   for (const [ip, h] of hits) if (now > h.resetAt) hits.delete(ip);
+  for (const map of [recoveryIssueIpHits, recoveryIssueAgentHits, recoveryVerifyIpHits]) {
+    for (const [key, entry] of map) if (now > entry.resetAt) map.delete(key);
+  }
 }, RATE_WINDOW_MS).unref();
 // ---------------------------------------------------------------------------
 // Express app
@@ -1139,8 +1258,9 @@ app.use(express.json({ limit: "64kb", type: () => true }));
 app.use((req, res, next) => {
   res.set({
     "access-control-allow-origin": "*",
-    "access-control-allow-headers": "content-type, x-agent-secret, payment-signature, x-payment",
+    "access-control-allow-headers": "content-type, x-agent-secret, payment-signature, x-payment, authorization",
     "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-expose-headers": "Retry-After, RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset",
   });
   if (req.method === "OPTIONS") return res.status(204).end();
   next();
@@ -1186,7 +1306,7 @@ app.get("/healthz", (req, res) => {
   res.json({
     ok: true,
     service: "claw-in-a-box",
-    version: "0.8.1",
+    version: "0.9.0",
     features: {
       telegram_hitl: TG_ENABLED,
       payment_mode: PAYMENT_MODE,
@@ -1202,6 +1322,8 @@ app.get("/healthz", (req, res) => {
       cdp_discovery_enabled: DISCOVERY_ENABLED,
       cdp_network: CDP.network,
       api_host: API_HOST,
+      operator_auth_configured: Boolean(OPERATOR_BEARER_KEY),
+      wallet_recovery: "eoa-eip191",
       persistence: persistence.state,
     },
     memory: {
@@ -1320,10 +1442,233 @@ async function guardCheckHandler(req, res, next) {
 
 app.post("/v1/guard/check", rateLimit, guardCheckHandler);
 
+app.get("/v1/approvals", rateLimit, requireOperator, async (req, res, next) => {
+  const status = req.query.status == null ? "" : String(req.query.status);
+  const allowedStatuses = new Set(["pending", "approved", "denied", "expired"]);
+  if (status && !allowedStatuses.has(status)) {
+    return res.status(400).json({
+      error: "invalid_query",
+      detail: "status must be pending, approved, denied, or expired",
+    });
+  }
+  const rawLimit = req.query.limit == null ? "25" : String(req.query.limit);
+  if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 100) {
+    return res.status(400).json({ error: "invalid_query", detail: "limit must be an integer from 1 through 100" });
+  }
+  try {
+    const rows = await persistence.listApprovals(status, Number(rawLimit));
+    const feed = rows.map((row) => approvalView({
+      ...(row.payload || {}),
+      id: row.id,
+      status: row.status,
+    }));
+    res.set("Cache-Control", "no-store");
+    return res.json({ approvals: feed, count: feed.length });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.get("/v1/approvals/:id", (req, res) => {
   const a = approvals.get(req.params.id);
   if (!a) return res.status(404).json({ error: "not_found", detail: "unknown approval id" });
   res.json(approvalView(a));
+});
+
+app.get("/v1/agents/:id/spend", rateLimit, async (req, res, next) => {
+  if (!persistence.hardReady()) {
+    return res.status(503).json({
+      error: "feature_disabled",
+      detail: "spend history requires PERSISTENCE=on and a connected, hydrated database",
+    });
+  }
+  const agentId = String(req.params.id);
+  const claimed = claimedAgents.get(agentId);
+  if (!claimed) return res.status(404).json({ error: "not_found", detail: "agent_id is not claimed" });
+  try {
+    requireAgentSecret(req, agentId);
+    const today = new Date().toISOString().slice(0, 10);
+    const spend = await persistence.getAgentSpend(agentId, today);
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      agent_id: agentId,
+      day: spend.day,
+      spent_today: spend.spent_today,
+      history: spend.history,
+      history_scope: "v0.9_forward_last_50",
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/v1/metrics", rateLimit, async (_req, res, next) => {
+  if (!persistence.hardReady()) {
+    return res.status(503).json({
+      error: "feature_disabled",
+      detail: "metrics require PERSISTENCE=on and a connected, hydrated database",
+    });
+  }
+  if (metricsCache.body && Date.now() < metricsCache.expiresAt) {
+    return res.json(metricsCache.body);
+  }
+  try {
+    const now = Date.now();
+    const today = new Date(now).toISOString().slice(0, 10);
+    const metrics = await persistence.getMetrics(today, Math.floor((now - 24 * 60 * 60 * 1000) / 1000));
+    const body = {
+      generated_at: new Date(now).toISOString(),
+      window_seconds: 86400,
+      ...metrics,
+    };
+    metricsCache = { expiresAt: now + 15000, body };
+    return res.json(body);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+function recoveryMessage({ agentId, nonce, domain, issuedAtMs, expiresAtMs }) {
+  return [
+    "Claw-in-a-Box agent secret recovery",
+    "Version: 1",
+    `Domain: ${domain}`,
+    `Agent ID: ${agentId}`,
+    `Nonce: ${nonce}`,
+    `Issued At: ${new Date(issuedAtMs).toISOString()}`,
+    `Expires At: ${new Date(expiresAtMs).toISOString()}`,
+    "Statement: Rotate the secret for this agent. This does not authorize a payment.",
+  ].join("\n");
+}
+
+function recoveryError(res, status, error, detail) {
+  return res.status(status).json({ error, detail });
+}
+
+app.post("/v1/agents/recover", rateLimit, async (req, res) => {
+  if (!persistence.hardReady()) {
+    return recoveryError(
+      res,
+      503,
+      "feature_disabled",
+      "wallet recovery requires PERSISTENCE=on and a connected, hydrated database"
+    );
+  }
+  const body = req.body || {};
+  const agentId = String(body.agent_id || "").trim();
+  if (!agentId) return recoveryError(res, 400, "missing_field", "agent_id is required");
+  if (agentId.length > 191) return recoveryError(res, 400, "invalid_agent_id", "agent_id must be at most 191 characters");
+  const isSubmission = body.nonce !== undefined || body.signature !== undefined;
+  const phase = isSubmission ? "verify" : "issue";
+  if (!enforceRecoveryRate(req, res, phase, agentId)) return;
+
+  res.set("Cache-Control", "no-store");
+  if (!isSubmission) {
+    try {
+      const identity = await persistence.getRecoveryIdentity(agentId);
+      if (!identity) return recoveryError(res, 404, "not_found", "agent_id is not claimed");
+      if (!/^0x[0-9a-fA-F]{40}$/.test(String(identity.claimed_by || ""))) {
+        return recoveryError(
+          res,
+          409,
+          "recovery_unavailable",
+          "this claim wallet cannot use EOA/EIP-191 recovery; contact the operator for manual recovery"
+        );
+      }
+      const nonce = crypto.randomBytes(32).toString("base64url");
+      const issuedAtMs = Date.now();
+      const expiresAtMs = issuedAtMs + RECOVERY_TTL_MS;
+      const nonceHash = secretHash(nonce);
+      await persistence.saveRecoveryChallenge({
+        nonce_hash: nonceHash,
+        agent_id: agentId,
+        domain: API_HOST,
+        issued_at_ms: issuedAtMs,
+        expires_at_ms: expiresAtMs,
+      });
+      persistence.audit("recovery_challenge_issued", agentId, agentId, {
+        expires_at: new Date(expiresAtMs).toISOString(),
+      });
+      return res.json({
+        agent_id: agentId,
+        nonce,
+        message: recoveryMessage({ agentId, nonce, domain: API_HOST, issuedAtMs, expiresAtMs }),
+        expires_at: new Date(expiresAtMs).toISOString(),
+      });
+    } catch (error) {
+      return recoveryError(res, error.status || 503, error.code || "feature_disabled", error.message);
+    }
+  }
+
+  const nonce = String(body.nonce || "");
+  const signature = String(body.signature || "");
+  if (!nonce || !signature) {
+    persistence.audit("agent_recovery_failed", agentId, agentId, { reason: "missing_proof" });
+    return recoveryError(res, 400, "missing_field", "nonce and signature are required together");
+  }
+  const nonceHash = secretHash(nonce);
+  try {
+    const challenge = await persistence.getRecoveryChallenge(nonceHash);
+    if (!challenge || String(challenge.agent_id) !== agentId || String(challenge.domain) !== API_HOST) {
+      persistence.audit("agent_recovery_failed", agentId, agentId, { reason: "unknown_challenge" });
+      return recoveryError(res, 404, "recovery_not_found", "unknown recovery challenge");
+    }
+    if (challenge.used_at) {
+      persistence.audit("agent_recovery_failed", agentId, agentId, { reason: "nonce_used" });
+      return recoveryError(res, 409, "nonce_used", "recovery nonce was already used");
+    }
+    if (Number(challenge.expires_at_ms) < Date.now()) {
+      persistence.audit("agent_recovery_failed", agentId, agentId, { reason: "nonce_expired" });
+      return recoveryError(res, 410, "nonce_expired", "recovery nonce has expired");
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(String(challenge.claimed_by || ""))) {
+      return recoveryError(
+        res,
+        409,
+        "recovery_unavailable",
+        "this claim wallet cannot use EOA/EIP-191 recovery; contact the operator for manual recovery"
+      );
+    }
+    const message = recoveryMessage({
+      agentId,
+      nonce,
+      domain: String(challenge.domain),
+      issuedAtMs: Number(challenge.issued_at_ms),
+      expiresAtMs: Number(challenge.expires_at_ms),
+    });
+    let recovered;
+    try {
+      recovered = await recoverMessageAddress({ message, signature });
+    } catch {
+      persistence.audit("agent_recovery_failed", agentId, agentId, { reason: "invalid_signature" });
+      return recoveryError(res, 400, "invalid_signature", "signature is not a valid EIP-191 proof");
+    }
+    if (!payersEqual(recovered, challenge.claimed_by)) {
+      persistence.audit("agent_recovery_failed", agentId, agentId, { reason: "signer_mismatch" });
+      return recoveryError(res, 403, "signer_mismatch", "signature is not from the claim wallet");
+    }
+    const claimed = claimedAgents.get(agentId);
+    if (!claimed) {
+      return recoveryError(res, 503, "feature_disabled", "claimed identity cache is unavailable");
+    }
+    const agentSecret = newAgentSecret();
+    const replacementHash = secretHash(agentSecret);
+    const recoveredAt = new Date().toISOString();
+    await persistence.consumeRecoveryChallenge({
+      nonceHash,
+      agentId,
+      domain: API_HOST,
+      nowMs: Date.now(),
+      newSecretHash: replacementHash,
+    });
+    claimed.secret_hash = replacementHash;
+    claimedAgents.set(agentId, claimed);
+    persistence.audit("agent_secret_recovered", agentId, agentId, { recovered_at: recoveredAt });
+    return res.json({ agent_id: agentId, agent_secret: agentSecret, recovered_at: recoveredAt });
+  } catch (error) {
+    persistence.audit("agent_recovery_failed", agentId, agentId, { reason: error.code || "feature_disabled" });
+    return recoveryError(res, error.status || 503, error.code || "feature_disabled", error.message);
+  }
 });
 
 app.post("/v1/verdicts/:id/consume", rateLimit, (req, res) => {

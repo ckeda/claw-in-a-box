@@ -11,23 +11,25 @@ hardening I built with Codex for my already-live x402 service.**
 
 Claw Console is the browser-only operator workbench for
 [Claw-in-a-Box](https://clawinabox.xyz), the human-approval layer for AI agent
-commerce. It turns the existing public authorization API into a visual,
-judge-testable product without adding a backend, account system, privileged
-key, or paid call.
+commerce. It turns the authorization API into a visual, judge-testable product
+without adding a Console backend, account system, or paid call.
 
-The Console is a static React/TypeScript SPA. Its default API is fixed to
-`https://api.clawinabox.xyz`, and its request adapter permits only the public
-v0.7.5 free endpoints. Attempts to use `/paid/*`, `/paid-okx/*`, unknown paths,
-or the wrong HTTP method fail in the browser before `fetch` can run.
+The Console is a static React/TypeScript SPA. v0.9 repository builds default to
+`https://test.clawinabox.xyz` and may set `VITE_API_BASE` at build time. Its
+request adapter permits only declared free endpoints. Attempts to use
+`/paid/*`, `/paid-okx/*`, unknown paths, or the wrong HTTP method fail in the
+browser before `fetch` can run.
 
 ## What judges can try
 
-- **Dashboard:** live version, payment readiness flags, heap, bounded collection sizes, uptime, and marketplace receipts from `GET /healthz`.
+- **Dashboard:** live health plus public aggregate metrics.
 - **Verdict Lab:** preset or validated inline policies, fired-rule explanations, locally stored history, and one-click reloading.
-- **Approvals:** a live timeline that polls no faster than once every three seconds and backs off on `429`.
+- **Approvals:** existing single-id timeline plus an operator-only live list feed.
+- **Spend:** agent-secret-scoped current spend and PII-minimized v0.9-forward history.
 - **Token Workbench:** mint, delegate children and grandchildren, decode locally, verify with an optional presenter, and animate cascading revocation.
 - **Telegram Binding:** generate a 15-minute bind code, copy `/bind CODE`, and verify whether reviews route to the caller or service operator.
 - **Policies:** render the live presets as readable cards and open editable copies in Verdict Lab.
+- **Access & Recovery:** separated visitor, agent-owner, and operator slots; strict toggle and EOA/EIP-191 recovery.
 
 ### Judge mode
 
@@ -65,20 +67,24 @@ src/storage.ts             bounded localStorage helpers
 src/pages/Dashboard.tsx    polite 10-second health polling
 src/pages/VerdictLab.tsx   guard playground and local history
 src/pages/Approvals.tsx    ≥3-second approval polling with 429 backoff
+src/pages/Spend.tsx        agent-owner last-50 ledger view
 src/pages/TokenWorkbench.tsx
 src/pages/TelegramBinding.tsx
 src/pages/Policies.tsx
+src/pages/Access.tsx       credential boundaries, strict mode, recovery
 ```
 
-Browser storage holds only this device's preferences, the last 30 verdicts, and
-up to 30 capability tokens. Tokens are authority: use the reset control on a
-shared device. A decoded token is always labelled untrusted until the API
+Persistent browser storage holds this device's preferences, the last 30
+verdicts, up to 30 capability tokens, and the optional single-agent owner
+credential. The highest-value operator key is never written to localStorage;
+it uses sessionStorage with an in-memory fallback and must be re-entered each
+session. Tokens and credentials are authority: use reset on a shared device. A
+decoded token is always labelled untrusted until the API
 verifies its signature, expiry, attenuation chain, audience, and revocation
 state.
 
-The Console never treats a hidden control as enforcement. Phase 0 has no login
-because it exposes only capabilities already available through the public free
-API; later owner/operator tiers must be enforced by server-side credentials.
+The Console never treats a hidden control as enforcement. v0.9 owner/operator
+tiers are enforced by server-side headers and fail-closed database gates.
 
 ## Built with Codex
 

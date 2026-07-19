@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ApiError, getHealth } from "../api";
-import type { HealthResponse } from "../types";
+import { ApiError, getHealth, getMetrics } from "../api";
+import type { HealthResponse, MetricsResponse } from "../types";
 import { ApiErrorBox, formatUptime, LoadingLine, PageHeader, StatusChip } from "../components/UI";
 
 function readyTone(value: unknown): "allow" | "review" | "deny" {
@@ -14,11 +14,13 @@ export default function Dashboard() {
   const [error, setError] = useState<unknown>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [refreshSignal, setRefreshSignal] = useState(0);
+  const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const data = await getHealth();
+      const [data, aggregateData] = await Promise.all([getHealth(), getMetrics()]);
       setHealth(data);
+      setMetrics(aggregateData);
       setError(null);
       setUpdatedAt(new Date());
       return 10_000;
@@ -61,7 +63,7 @@ export default function Dashboard() {
       <PageHeader
         eyebrow="Live service telemetry"
         title="The service has a pulse."
-        description="An honest view of the production API: payment readiness, memory pressure, collections, and uptime—without touching a paid route."
+        description="An honest view of the configured API: payment readiness, memory pressure, collections, and uptime—without touching a paid route."
         action={
           <button className="button secondary" type="button" onClick={() => setRefreshSignal((value) => value + 1)}>
             Refresh now
@@ -76,7 +78,7 @@ export default function Dashboard() {
         <>
           <div className="hero-status panel">
             <div>
-              <p className="eyebrow">api.clawinabox.xyz</p>
+              <p className="eyebrow">Configured Claw API</p>
               <h2>
                 {health.ok ? "Operational" : "Degraded"}
                 <span className={`signal-orb ${health.ok ? "good" : "bad"}`} />
@@ -110,6 +112,15 @@ export default function Dashboard() {
               <p>Agent-to-Telegram routing entries</p>
             </article>
           </div>
+
+          {metrics && (
+            <div className="aggregate-strip panel" aria-label="Aggregate metrics">
+              <div><span>Claimed agents</span><strong>{metrics.agents.claimed}</strong></div>
+              <div><span>Pending approvals</span><strong>{metrics.approvals.pending}</strong></div>
+              <div><span>Consumed verdicts · 24h</span><strong>{metrics.verdicts.consumed_24h}</strong></div>
+              <div><span>Active spenders today</span><strong>{metrics.spend.active_agents_today}</strong></div>
+            </div>
+          )}
 
           <div className="two-column">
             <article className="panel">
@@ -150,7 +161,7 @@ export default function Dashboard() {
                   <span>Writes <strong>{persistence.writes_ok ?? 0} ok / {persistence.writes_failed ?? 0} failed</strong></span>
                 </div>
               ) : (
-                <p className="muted-note">Production v0.7.5 predates the persistence telemetry object. The v0.8.0 staging build adds it without inventing data here.</p>
+                <p className="muted-note">This API did not report persistence telemetry; the Console does not invent a status.</p>
               )}
             </article>
           </div>

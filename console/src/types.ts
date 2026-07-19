@@ -79,6 +79,50 @@ export interface ApprovalResponse {
   resolved_at?: string | null;
 }
 
+export interface ApprovalFeedResponse {
+  approvals: ApprovalResponse[];
+  count: number;
+}
+
+export interface SpendHistoryRow {
+  id: string;
+  delta: number;
+  spent_after: number;
+  reason: "guard_allow" | "human_approved" | "verdict_expired_refund" | string;
+  ref_id: string | null;
+  created_at: string;
+}
+
+export interface SpendResponse {
+  agent_id: string;
+  day: string;
+  spent_today: number;
+  history: SpendHistoryRow[];
+  history_scope: "v0.9_forward_last_50";
+}
+
+export interface MetricsResponse {
+  generated_at: string;
+  window_seconds: number;
+  agents: { claimed: number; strict: number };
+  approvals: { pending: number; approved_24h: number; denied_24h: number; expired_24h: number };
+  verdicts: { pending: number; consumed_24h: number; expired_24h: number };
+  spend: { active_agents_today: number; ledger_changes_24h: number };
+}
+
+export interface RecoveryChallenge {
+  agent_id: string;
+  nonce: string;
+  message: string;
+  expires_at: string;
+}
+
+export interface RecoveryResult {
+  agent_id: string;
+  agent_secret: string;
+  recovered_at: string;
+}
+
 export interface TokenSegment {
   aud: string;
   scopes: string[];

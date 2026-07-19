@@ -6,6 +6,10 @@ describe("Console API safety rail", () => {
     expect(() => assertFreeEndpoint("/healthz", "GET")).not.toThrow();
     expect(() => assertFreeEndpoint("/v1/approvals/a1b2c3d4e5f60708", "GET")).not.toThrow();
     expect(() => assertFreeEndpoint("/v1/operators/console-agent", "GET")).not.toThrow();
+    expect(() => assertFreeEndpoint("/v1/metrics", "GET")).not.toThrow();
+    expect(() => assertFreeEndpoint("/v1/approvals?status=pending&limit=50", "GET")).not.toThrow();
+    expect(() => assertFreeEndpoint("/v1/agents/claimed-1/spend", "GET")).not.toThrow();
+    expect(() => assertFreeEndpoint("/v1/agents/recover", "POST")).not.toThrow();
   });
 
   it("blocks every paid prefix before fetch", () => {
@@ -14,8 +18,17 @@ describe("Console API safety rail", () => {
   });
 
   it("blocks unknown and wrong-method endpoints", () => {
-    expect(() => assertFreeEndpoint("/v1/metrics", "GET")).toThrow(/unknown endpoint/);
+    expect(() => assertFreeEndpoint("/v1/metrics", "POST")).toThrow(/unknown endpoint/);
     expect(() => assertFreeEndpoint("/healthz", "POST")).toThrow(/unknown endpoint/);
+  });
+
+  it("passes credentials only in headers, never query strings", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ approvals: [], count: 0 }), { status: 200 }),
+    );
+    await apiRequest("/v1/approvals?limit=25", { headers: { authorization: "Bearer operator-test" } }, fetcher);
+    expect(fetcher.mock.calls[0][0]).not.toContain("operator-test");
+    expect(fetcher.mock.calls[0][1]?.headers).toMatchObject({ authorization: "Bearer operator-test" });
   });
 
   it("never calls fetch when a route is blocked", async () => {

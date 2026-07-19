@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { ApiError, getApproval } from "../api";
+import { ApiError, getApproval, getApprovalFeed } from "../api";
 import type { ApprovalResponse } from "../types";
 import { ApiErrorBox, CopyButton, EmptyState, PageHeader, StatusChip, formatDate } from "../components/UI";
+import { loadOperatorKey } from "../storage";
 
 export default function Approvals({ initialApprovalId }: { initialApprovalId: string }) {
   const [input, setInput] = useState(initialApprovalId);
@@ -10,6 +11,10 @@ export default function Approvals({ initialApprovalId }: { initialApprovalId: st
   const [error, setError] = useState<unknown>(null);
   const [now, setNow] = useState(Date.now());
   const [pollDelay, setPollDelay] = useState(3_000);
+  const [feed, setFeed] = useState<ApprovalResponse[]>([]);
+  const [feedStatus, setFeedStatus] = useState("");
+  const [feedBusy, setFeedBusy] = useState(false);
+  const operatorKey = loadOperatorKey();
 
   useEffect(() => {
     if (initialApprovalId) {
@@ -71,6 +76,23 @@ export default function Approvals({ initialApprovalId }: { initialApprovalId: st
     setWatchedId(id);
   }
 
+  async function refreshFeed() {
+    if (!operatorKey) {
+      setError(new Error("Enter the operator bearer key in Access & Recovery for this session."));
+      return;
+    }
+    setFeedBusy(true);
+    setError(null);
+    try {
+      const result = await getApprovalFeed(operatorKey, feedStatus, 50);
+      setFeed(result.approvals);
+    } catch (nextError) {
+      setError(nextError);
+    } finally {
+      setFeedBusy(false);
+    }
+  }
+
   const statusTone = approval?.status === "approved" ? "allow" : approval?.status === "pending" ? "review" : approval ? "deny" : "neutral";
 
   return (
@@ -93,6 +115,23 @@ export default function Approvals({ initialApprovalId }: { initialApprovalId: st
       </div>
 
       <ApiErrorBox error={error} />
+
+      <div className="operator-feed panel">
+        <div className="panel-title-row">
+          <div><p className="eyebrow">Operator session</p><h2>Live approval feed</h2></div>
+          <StatusChip tone={operatorKey ? "review" : "neutral"}>{operatorKey ? "god-view active" : "key required"}</StatusChip>
+        </div>
+        <div className="feed-controls">
+          <label>Status<select value={feedStatus} onChange={(event) => setFeedStatus(event.target.value)}><option value="">All</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="denied">Denied</option><option value="expired">Expired</option></select></label>
+          <button className="button secondary" type="button" disabled={feedBusy} onClick={() => void refreshFeed()}>{feedBusy ? "Loading…" : "Refresh feed"}</button>
+        </div>
+        <p className="muted-note">This reads the existing approximately 30-minute live feed. The bearer key is sent only in the Authorization header.</p>
+        {feed.length > 0 && (
+          <div className="table-wrap feed-table"><table><thead><tr><th>Status</th><th>Approval</th><th>Agent</th><th>Amount</th><th>Destination</th><th>Created</th></tr></thead><tbody>
+            {feed.map((item) => <tr key={item.approval_id} onClick={() => { setInput(item.approval_id); setWatchedId(item.approval_id); }}><td><StatusChip tone={item.status === "approved" ? "allow" : item.status === "pending" ? "review" : "deny"}>{item.status}</StatusChip></td><td><code>{item.approval_id}</code></td><td><code>{item.request.agent_id}</code></td><td>{item.request.amount}</td><td><code>{item.request.destination || "—"}</code></td><td>{formatDate(item.created_at)}</td></tr>)}
+          </tbody></table></div>
+        )}
+      </div>
 
       {approval ? (
         <div className="approval-stage panel">

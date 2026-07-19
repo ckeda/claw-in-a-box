@@ -18,6 +18,9 @@ const empty = () => ({
   verdicts: {},
   events: [],
   next_event_id: 1,
+  spend_ledger: [],
+  next_spend_id: 1,
+  recovery_nonces: {},
 });
 
 function load() {
@@ -47,6 +50,26 @@ function execute(target, sql, params = []) {
   }
   if (q.startsWith("insert into daily_spend")) {
     target.daily_spend[params[0]] = { agent_id: params[0], day: params[1], spent: Number(params[2]) };
+    return [{ affectedRows: 1 }, []];
+  }
+  if (q.startsWith("insert into spend_ledger")) {
+    target.spend_ledger.push({
+      id: target.next_spend_id++,
+      agent_id: params[0],
+      day: params[1],
+      delta: Number(params[2]),
+      spent_after: Number(params[3]),
+      reason: params[4],
+      ref_id: params[5] ?? null,
+      created_at: new Date().toISOString(),
+    });
+    return [{ affectedRows: 1 }, []];
+  }
+  if (q.startsWith("delete from spend_ledger")) {
+    const cutoffMs = Number(params[0]) * 1000;
+    target.spend_ledger = target.spend_ledger.filter(
+      (row) => new Date(row.created_at).getTime() >= cutoffMs
+    );
     return [{ affectedRows: 1 }, []];
   }
   if (q.startsWith("delete from daily_spend")) {
@@ -85,7 +108,7 @@ function execute(target, sql, params = []) {
   }
   if (q.startsWith("update agents set secret_hash")) {
     const row = target.agents[params[1]];
-    if (!row || row.secret_hash !== params[2]) return [{ affectedRows: 0 }, []];
+    if (!row || (params.length > 2 && row.secret_hash !== params[2])) return [{ affectedRows: 0 }, []];
     row.secret_hash = params[0];
     return [{ affectedRows: 1 }, []];
   }
@@ -121,6 +144,30 @@ function execute(target, sql, params = []) {
     });
     return [{ affectedRows: 1 }, []];
   }
+  if (q.startsWith("insert into agent_recovery_nonces")) {
+    if (target.recovery_nonces[params[0]]) throw duplicate();
+    target.recovery_nonces[params[0]] = {
+      nonce_hash: params[0],
+      agent_id: params[1],
+      domain: params[2],
+      issued_at_ms: Number(params[3]),
+      expires_at_ms: Number(params[4]),
+      used_at: null,
+    };
+    return [{ affectedRows: 1 }, []];
+  }
+  if (q.startsWith("update agent_recovery_nonces set used_at")) {
+    const row = target.recovery_nonces[params[0]];
+    if (!row || row.used_at) return [{ affectedRows: 0 }, []];
+    row.used_at = new Date().toISOString();
+    return [{ affectedRows: 1 }, []];
+  }
+  if (q.startsWith("delete from agent_recovery_nonces")) {
+    for (const [hash, row] of Object.entries(target.recovery_nonces)) {
+      if (Number(row.expires_at_ms) < Number(params[0])) delete target.recovery_nonces[hash];
+    }
+    return [{ affectedRows: 1 }, []];
+  }
   if (q.startsWith("delete from events")) {
     const limit = Number(params[0]);
     if (target.events.length > limit) target.events = target.events.slice(-limit);
@@ -134,16 +181,91 @@ function query(target, sql, params = []) {
   if (q.startsWith("create table")) return [{ affectedRows: 0 }, []];
   if (q === "select tid from revoked_tokens") return [Object.values(target.revoked_tokens), []];
   if (q.startsWith("select agent_id, day, spent from daily_spend")) {
+    if (q.includes("where agent_id = ?")) {
+      return [Object.values(target.daily_spend).filter(
+        (row) => row.agent_id === params[0] && row.day === params[1]
+      ), []];
+    }
     return [Object.values(target.daily_spend).filter((row) => row.day === params[0]), []];
   }
   if (q === "select agent_id, chat_id from operator_bindings") return [Object.values(target.operator_bindings), []];
   if (q.startsWith("select id, payload from approvals")) {
     return [Object.values(target.approvals).filter((row) => row.status === "pending"), []];
   }
+  if (q.startsWith("select id, status, payload from approvals")) {
+    const status = q.includes("where status = ?") ? params[0] : null;
+    const limitMatch = q.match(/limit (\d+)$/);
+    const limit = limitMatch ? Number(limitMatch[1]) : 25;
+    return [Object.values(target.approvals)
+      .filter((row) => !status || row.status === status)
+      .sort((a, b) => String(b.payload.created_at || "").localeCompare(String(a.payload.created_at || "")))
+      .slice(0, limit), []];
+  }
   if (q.startsWith("select id, agent_id, amount, day, status, issued_at, consumed_at from verdicts")) {
     return [Object.values(target.verdicts).filter((row) => row.status === "pending"), []];
   }
   if (q.startsWith("select agent_id, secret_hash")) return [Object.values(target.agents), []];
+  if (q.startsWith("select id, delta, spent_after")) {
+    return [target.spend_ledger
+      .filter((row) => row.agent_id === params[0])
+      .sort((a, b) => b.id - a.id)
+      .slice(0, 50), []];
+  }
+  if (q.startsWith("select count(*) as claimed")) {
+    const rows = Object.values(target.agents);
+    return [[{
+      claimed: rows.length,
+      strict_count: rows.filter((row) => Boolean(Number(row.strict_mode))).length,
+    }], []];
+  }
+  if (q.startsWith("select count(*) as pending from approvals")) {
+    return [[{ pending: Object.values(target.approvals).filter((row) => row.status === "pending").length }], []];
+  }
+  if (q.startsWith("select count(*) as pending from verdicts")) {
+    return [[{ pending: Object.values(target.verdicts).filter((row) => row.status === "pending").length }], []];
+  }
+  if (q.startsWith("select count(*) as active_agents_today")) {
+    return [[{
+      active_agents_today: Object.values(target.daily_spend).filter((row) => row.day === params[0]).length,
+    }], []];
+  }
+  if (q.startsWith("select count(*) as ledger_changes_24h")) {
+    const sinceMs = Number(params[0]) * 1000;
+    return [[{
+      ledger_changes_24h: target.spend_ledger.filter(
+        (row) => new Date(row.created_at).getTime() >= sinceMs
+      ).length,
+    }], []];
+  }
+  if (q.startsWith("select coalesce(sum(type = 'approval_resolved'")) {
+    const sinceMs = Number(params[0]) * 1000;
+    const events = target.events.filter((event) => new Date(event.ts).getTime() >= sinceMs);
+    return [[{
+      approved_24h: events.filter((event) => event.type === "approval_resolved" && event.payload.status === "approved").length,
+      denied_24h: events.filter((event) => event.type === "approval_resolved" && event.payload.status === "denied").length,
+      approval_expired_24h: events.filter((event) => event.type === "approval_resolved" && event.payload.status === "expired").length,
+      consumed_24h: events.filter((event) => event.type === "verdict_consumed").length,
+      verdict_expired_24h: events.filter((event) => event.type === "verdict_expired").length,
+    }], []];
+  }
+  if (q.startsWith("select agent_id, claimed_by from agents where agent_id = ?")) {
+    const row = target.agents[params[0]];
+    return [row ? [row] : [], []];
+  }
+  if (q.startsWith("select n.nonce_hash")) {
+    const nonce = target.recovery_nonces[params[0]];
+    if (!nonce) return [[], []];
+    const agent = target.agents[nonce.agent_id];
+    return [[{ ...nonce, claimed_by: agent?.claimed_by ?? null }], []];
+  }
+  if (q.startsWith("select nonce_hash, agent_id, domain, expires_at_ms, used_at")) {
+    const nonce = target.recovery_nonces[params[0]];
+    return [nonce ? [nonce] : [], []];
+  }
+  if (q.startsWith("select agent_id, claimed_by from agents where agent_id = ? for update")) {
+    const row = target.agents[params[0]];
+    return [row ? [row] : [], []];
+  }
   return execute(target, sql, params);
 }
 

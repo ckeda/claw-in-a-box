@@ -233,6 +233,18 @@ async function main() {
       JSON.stringify(raceStatuses) === JSON.stringify([201, 409]));
     ok("concurrent first-claim race settles exactly once", facilitator.hits.settle === beforeRaceSettle + 1);
 
+    const beforeMirrorRaceSettle = facilitator.hits.settle;
+    const mirrorRaced = await Promise.all([
+      post(8831, "/paid-okx/v1/agents/claim", { agent_id: "mirror-raced-id" }, header),
+      post(8831, "/paid-okx/v1/agents/claim", { agent_id: "mirror-raced-id" }, header),
+    ]);
+    const mirrorRaceStatuses = mirrorRaced.map((item) => item.status).sort();
+    await delay(100);
+    ok("/paid-okx concurrent claim race returns one 201 + one 409, never 500",
+      JSON.stringify(mirrorRaceStatuses) === JSON.stringify([201, 409]));
+    ok("/paid-okx concurrent claim race settles exactly once",
+      facilitator.hits.settle === beforeMirrorRaceSettle + 1);
+
     const settlementPayer = "0x5555555555555555555555555555555555555555";
     facilitator.setSettlementPayer(settlementPayer);
     const mismatchChallenge = await challenge(8831, "/paid/v1/agents/claim");

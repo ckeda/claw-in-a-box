@@ -74,6 +74,28 @@ const TABLES = [
      INDEX event_type_ts (type, ts),
      INDEX event_agent_ts (agent_id, ts)
    )`,
+  `CREATE TABLE IF NOT EXISTS spend_ledger (
+     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+     agent_id VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+     day CHAR(10) NOT NULL,
+     delta DOUBLE NOT NULL,
+     spent_after DOUBLE NOT NULL,
+     reason VARCHAR(32) NOT NULL,
+     ref_id VARCHAR(64) NULL,
+     created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+     INDEX spend_agent_created (agent_id, created_at),
+     INDEX spend_created (created_at)
+   )`,
+  `CREATE TABLE IF NOT EXISTS agent_recovery_nonces (
+     nonce_hash CHAR(64) PRIMARY KEY,
+     agent_id VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+     domain VARCHAR(255) NOT NULL,
+     issued_at_ms BIGINT UNSIGNED NOT NULL,
+     expires_at_ms BIGINT UNSIGNED NOT NULL,
+     used_at TIMESTAMP(3) NULL,
+     INDEX recovery_agent_issued (agent_id, issued_at_ms),
+     INDEX recovery_expiry (expires_at_ms)
+   )`,
 ];
 
 function featureDisabled(detail = "identity persistence is unavailable") {
@@ -91,7 +113,19 @@ function alreadyClaimed() {
 }
 
 function isDuplicate(error) {
-  return error && (error.code === "ER_DUP_ENTRY" || error.errno === 1062);
+  return error && (
+    error.code === "ER_DUP_ENTRY" ||
+    error.code === "ER_DUP_ENTRY_WITH_KEY_NAME" ||
+    error.errno === 1062 ||
+    error.sqlState === "23000"
+  );
+}
+
+function storageError(code, status, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  return error;
 }
 
 function recordFailure(error) {
@@ -333,6 +367,219 @@ async function setStrictMode(agentId, secretHash, strictMode) {
   }
 }
 
+async function listApprovals(status, limit) {
+  requireHardReady();
+  try {
+    const params = [];
+    let sql = "SELECT id, status, payload FROM approvals";
+    if (status) {
+      sql += " WHERE status = ?";
+      params.push(status);
+    }
+    sql += ` ORDER BY created_at DESC LIMIT ${Number(limit)}`;
+    const [rows] = await pool.query(sql, params);
+    return rows.map((row) => ({
+      id: String(row.id),
+      status: String(row.status),
+      payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
+    }));
+  } catch (error) {
+    markDisconnected(error);
+    throw featureDisabled();
+  }
+}
+
+async function getAgentSpend(agentId, today) {
+  requireHardReady();
+  try {
+    const [[dailyRows], [historyRows]] = await Promise.all([
+      pool.query(
+        "SELECT agent_id, day, spent FROM daily_spend WHERE agent_id = ? AND day = ?",
+        [agentId, today]
+      ),
+      pool.query(
+        "SELECT id, delta, spent_after, reason, ref_id, created_at FROM spend_ledger " +
+        "WHERE agent_id = ? ORDER BY id DESC LIMIT 50",
+        [agentId]
+      ),
+    ]);
+    const daily = dailyRows[0];
+    return {
+      day: today,
+      spent_today: daily ? Number(daily.spent) : 0,
+      history: historyRows.map((row) => ({
+        id: String(row.id),
+        delta: Number(row.delta),
+        spent_after: Number(row.spent_after),
+        reason: String(row.reason),
+        ref_id: row.ref_id == null ? null : String(row.ref_id),
+        created_at: row.created_at instanceof Date
+          ? row.created_at.toISOString()
+          : String(row.created_at),
+      })),
+    };
+  } catch (error) {
+    markDisconnected(error);
+    throw featureDisabled();
+  }
+}
+
+async function getMetrics(today, sinceEpochSeconds) {
+  requireHardReady();
+  try {
+    const [agentsResult, approvalsResult, verdictsResult, spendResult, ledgerResult, eventsResult] =
+      await Promise.all([
+        pool.query(
+          "SELECT COUNT(*) AS claimed, COALESCE(SUM(strict_mode = TRUE), 0) AS strict_count FROM agents"
+        ),
+        pool.query("SELECT COUNT(*) AS pending FROM approvals WHERE status = 'pending'"),
+        pool.query("SELECT COUNT(*) AS pending FROM verdicts WHERE status = 'pending'"),
+        pool.query("SELECT COUNT(*) AS active_agents_today FROM daily_spend WHERE day = ?", [today]),
+        pool.query(
+          "SELECT COUNT(*) AS ledger_changes_24h FROM spend_ledger WHERE created_at >= FROM_UNIXTIME(?)",
+          [sinceEpochSeconds]
+        ),
+        pool.query(
+          "SELECT " +
+          "COALESCE(SUM(type = 'approval_resolved' AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.status')) = 'approved'), 0) AS approved_24h, " +
+          "COALESCE(SUM(type = 'approval_resolved' AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.status')) = 'denied'), 0) AS denied_24h, " +
+          "COALESCE(SUM(type = 'approval_resolved' AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.status')) = 'expired'), 0) AS approval_expired_24h, " +
+          "COALESCE(SUM(type = 'verdict_consumed'), 0) AS consumed_24h, " +
+          "COALESCE(SUM(type = 'verdict_expired'), 0) AS verdict_expired_24h " +
+          "FROM events WHERE ts >= FROM_UNIXTIME(?)",
+          [sinceEpochSeconds]
+        ),
+      ]);
+    const agents = agentsResult[0][0] || {};
+    const approvals = approvalsResult[0][0] || {};
+    const verdicts = verdictsResult[0][0] || {};
+    const spend = spendResult[0][0] || {};
+    const ledger = ledgerResult[0][0] || {};
+    const events = eventsResult[0][0] || {};
+    return {
+      agents: { claimed: Number(agents.claimed || 0), strict: Number(agents.strict_count || 0) },
+      approvals: {
+        pending: Number(approvals.pending || 0),
+        approved_24h: Number(events.approved_24h || 0),
+        denied_24h: Number(events.denied_24h || 0),
+        expired_24h: Number(events.approval_expired_24h || 0),
+      },
+      verdicts: {
+        pending: Number(verdicts.pending || 0),
+        consumed_24h: Number(events.consumed_24h || 0),
+        expired_24h: Number(events.verdict_expired_24h || 0),
+      },
+      spend: {
+        active_agents_today: Number(spend.active_agents_today || 0),
+        ledger_changes_24h: Number(ledger.ledger_changes_24h || 0),
+      },
+    };
+  } catch (error) {
+    markDisconnected(error);
+    throw featureDisabled();
+  }
+}
+
+async function getRecoveryIdentity(agentId) {
+  requireHardReady();
+  try {
+    const [rows] = await pool.query(
+      "SELECT agent_id, claimed_by FROM agents WHERE agent_id = ?",
+      [agentId]
+    );
+    if (!rows[0]) return null;
+    return {
+      agent_id: String(rows[0].agent_id),
+      claimed_by: rows[0].claimed_by == null ? null : String(rows[0].claimed_by),
+    };
+  } catch (error) {
+    markDisconnected(error);
+    throw featureDisabled();
+  }
+}
+
+async function saveRecoveryChallenge(challenge) {
+  requireHardReady();
+  try {
+    await pool.execute(
+      "INSERT INTO agent_recovery_nonces " +
+      "(nonce_hash, agent_id, domain, issued_at_ms, expires_at_ms, used_at) VALUES (?,?,?,?,?,NULL)",
+      [
+        challenge.nonce_hash,
+        challenge.agent_id,
+        challenge.domain,
+        challenge.issued_at_ms,
+        challenge.expires_at_ms,
+      ]
+    );
+    state.writes_ok++;
+  } catch (error) {
+    markDisconnected(error);
+    throw featureDisabled();
+  }
+}
+
+async function getRecoveryChallenge(nonceHash) {
+  requireHardReady();
+  try {
+    const [rows] = await pool.query(
+      "SELECT n.nonce_hash, n.agent_id, n.domain, n.issued_at_ms, n.expires_at_ms, n.used_at, a.claimed_by " +
+      "FROM agent_recovery_nonces n JOIN agents a ON a.agent_id = n.agent_id WHERE n.nonce_hash = ?",
+      [nonceHash]
+    );
+    return rows[0] || null;
+  } catch (error) {
+    markDisconnected(error);
+    throw featureDisabled();
+  }
+}
+
+async function consumeRecoveryChallenge({ nonceHash, agentId, domain, nowMs, newSecretHash }) {
+  requireHardReady();
+  const conn = await pool.getConnection().catch((error) => {
+    markDisconnected(error);
+    throw featureDisabled();
+  });
+  try {
+    await conn.beginTransaction();
+    const [nonceRows] = await conn.query(
+      "SELECT nonce_hash, agent_id, domain, expires_at_ms, used_at FROM agent_recovery_nonces " +
+      "WHERE nonce_hash = ? FOR UPDATE",
+      [nonceHash]
+    );
+    const nonce = nonceRows[0];
+    if (!nonce || String(nonce.agent_id) !== agentId || String(nonce.domain) !== domain) {
+      throw storageError("recovery_not_found", 404, "unknown recovery challenge");
+    }
+    if (nonce.used_at) throw storageError("nonce_used", 409, "recovery nonce was already used");
+    if (Number(nonce.expires_at_ms) < nowMs) {
+      throw storageError("nonce_expired", 410, "recovery nonce has expired");
+    }
+    const [agentRows] = await conn.query(
+      "SELECT agent_id, claimed_by FROM agents WHERE agent_id = ? FOR UPDATE",
+      [agentId]
+    );
+    if (!agentRows[0]) throw storageError("not_found", 404, "agent_id is not claimed");
+    await conn.execute("UPDATE agents SET secret_hash = ? WHERE agent_id = ?", [newSecretHash, agentId]);
+    const [used] = await conn.execute(
+      "UPDATE agent_recovery_nonces SET used_at = NOW(3) WHERE nonce_hash = ? AND used_at IS NULL",
+      [nonceHash]
+    );
+    if (Number(used.affectedRows) !== 1) {
+      throw storageError("nonce_used", 409, "recovery nonce was already used");
+    }
+    await conn.commit();
+    state.writes_ok++;
+  } catch (error) {
+    try { await conn.rollback(); } catch {}
+    if (error && error.status) throw error;
+    markDisconnected(error);
+    throw featureDisabled();
+  } finally {
+    conn.release();
+  }
+}
+
 const approvalRow = (approval) => {
   const { waiters, ...rest } = approval;
   return rest;
@@ -348,12 +595,23 @@ module.exports = {
   rollbackClaim,
   rotateAgent,
   setStrictMode,
+  listApprovals,
+  getAgentSpend,
+  getMetrics,
+  getRecoveryIdentity,
+  saveRecoveryChallenge,
+  getRecoveryChallenge,
+  consumeRecoveryChallenge,
   audit,
   saveRevoked: (tid) => fire("INSERT IGNORE INTO revoked_tokens (tid) VALUES (?)", [tid]),
   saveSpend: (agentId, day, spent) => fire(
     "INSERT INTO daily_spend (agent_id, day, spent) VALUES (?,?,?) " +
     "ON DUPLICATE KEY UPDATE day=VALUES(day), spent=VALUES(spent)",
     [agentId, day, spent]
+  ),
+  saveSpendChange: (agentId, day, delta, spentAfter, reason, refId = null) => fire(
+    "INSERT INTO spend_ledger (agent_id, day, delta, spent_after, reason, ref_id) VALUES (?,?,?,?,?,?)",
+    [agentId, day, delta, spentAfter, reason, refId]
   ),
   saveApproval: (approval) => fire(
     "INSERT INTO approvals (id, status, payload) VALUES (?,?,?) " +
@@ -379,4 +637,12 @@ module.exports = {
     [verdict.status, verdict.consumed_at || null, verdict.id]
   ),
   purgeOldSpend: (today) => fire("DELETE FROM daily_spend WHERE day <> ?", [today]),
+  purgeSpendLedger: (cutoffEpochSeconds) => fire(
+    "DELETE FROM spend_ledger WHERE created_at < FROM_UNIXTIME(?)",
+    [cutoffEpochSeconds]
+  ),
+  purgeRecoveryNonces: (nowMs) => fire(
+    "DELETE FROM agent_recovery_nonces WHERE expires_at_ms < ?",
+    [nowMs]
+  ),
 };

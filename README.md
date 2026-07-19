@@ -29,10 +29,10 @@ Marketplace listings:
 - [ClawGuard on OKX.AI](https://www.okx.ai/agents/5854) — USDT0 on X Layer through the official OKX x402 SDK
 - [Claw-in-a-Box on Agentic.Market](https://agentic.market/services/api-clawinabox-xyz) — USDC on Base through the Coinbase/x402 Bazaar rail
 
-This branch is the v0.8.1 staging candidate. The live mainnet service remains
+This branch is the v0.9.0 staging candidate. The live mainnet service remains
 on its independently verified release until the owner completes staging,
 shadow, verify-live, and observation gates; this repository state is not a
-claim that v0.8.1 has been promoted.
+claim that v0.8.1 or v0.9.0 has been promoted.
 
 ## Claw Console
 
@@ -47,8 +47,9 @@ Build Week product; the live API it calls is pre-existing production
 infrastructure. Only later server increments actually authored in the same
 recorded Codex session belong to the submission.
 
-The Console is an independently deployable static SPA: no backend, privileged
-key, new API endpoint, or mainnet service change is required. See its
+The Console is an independently deployable static SPA. Its visitor tools need
+no key; v0.9 agent-owner and operator views are enforced by the service's new
+read/recovery APIs. See its
 [`README`](console/README.md) for judge mode, local setup, tests, and the human
 publication checklist.
 
@@ -122,6 +123,23 @@ expiry. Unconsumed verdicts expire and refund their same-day ledger charge,
 including expiry during downtime. Audit events persist the claim, binding,
 approval, verdict, mismatch, and revocation lifecycle.
 
+### Authenticated operational views and wallet recovery
+
+v0.9.0 adds three server-enforced Console roles. Visitors can read public,
+aggregate-only `GET /v1/metrics`. An agent owner presents that agent's
+`X-Agent-Secret` to read current spend plus PII-minimized v0.9-forward history
+at `GET /v1/agents/:id/spend`. The single operator bearer key gates the
+approximately 30-minute god-view at `GET /v1/approvals`; it grants no mutation
+and cannot bypass agent-owner checks.
+
+Claim-wallet recovery uses a five-minute, domain-bound EIP-191 challenge at
+`POST /v1/agents/recover`. Nonces are stored only as hashes and consumed once
+in the same transaction that rotates the secret. v0.9 supports EOA wallets;
+contract and custodial claimers require manual operator recovery. All three
+new reads and recovery fail closed unless `PERSISTENCE=on` is connected and
+hydrated. In the Console, the operator key is sessionStorage/in-memory only;
+the lower-scope agent secret may be stored in localStorage.
+
 ## Quickstart
 
 Call the hosted free API without an account:
@@ -178,11 +196,14 @@ service/
   SKILL.md            agent-facing API documentation
   test-v2.js          38-check baseline suite across six boot modes
   test-v081.js        v0.8.1 security, payment, audit, and restart suite
+  test-v09.js         v0.9 reads, recovery, rate/CORS, and fail-closed suite
   package.json        deployable service manifest
   package-lock.json   locked Node 18-compatible dependency graph
 plugins/nandatown/    NANDA auth plugin, validators, scenario, and tests
 docs/guarantees.md    enforcement guarantees and honest boundaries
+docs/v0.9.0-design.md reviewed Face API, data, threat, and Console design
 CHANGELOG.md          release history, including artifact-only versions
+llms.txt              root-site machine-readable project summary
 console/              static operator Console and Build Week submission
 ```
 
@@ -219,7 +240,7 @@ suite is necessary but never sufficient for mainnet promotion.
 ## Roadmap
 
 - **v0.8.1 — Locks:** Pay-to-Claim identity, strict mode, execution-bound verdicts, and audit events
-- **v0.9.0 — Face:** promote the Phase 0 Console and add authenticated read APIs
+- **v0.9.0 — Face:** authenticated operational views, recovery, and the official Console source
 - **v1.0.0 — Promise:** frozen `/v1` contract, public guarantees, and deprecation policy
 - **v1.1.0 — Probe:** trading-policy and MCP discovery experiments with written kill criteria
 

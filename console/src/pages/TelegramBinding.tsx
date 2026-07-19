@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { getOperatorRouting, registerOperator } from "../api";
 import { ApiErrorBox, CopyButton, EmptyState, PageHeader, StatusChip } from "../components/UI";
-import { loadPreference, makeConsoleAgentId, savePreference } from "../storage";
+import { loadAgentCredential, loadPreference, makeConsoleAgentId, savePreference } from "../storage";
 import type { BindingRegistration } from "../types";
 
 export default function TelegramBinding() {
-  const [agentId, setAgentId] = useState(() => loadPreference("binding-agent") || makeConsoleAgentId("binding"));
+  const credential = loadAgentCredential();
+  const [agentId, setAgentId] = useState(() => credential?.agentId || loadPreference("binding-agent") || makeConsoleAgentId("binding"));
   const [registration, setRegistration] = useState<BindingRegistration | null>(null);
   const [expiresAt, setExpiresAt] = useState(0);
   const [now, setNow] = useState(Date.now());
@@ -51,7 +52,7 @@ export default function TelegramBinding() {
     setBusy(true);
     setError(null);
     try {
-      const result = await registerOperator(agentId.trim());
+      const result = await registerOperator(agentId.trim(), credential?.agentId === agentId.trim() ? credential.secret : "");
       savePreference("binding-agent", agentId.trim());
       setRegistration(result);
       setExpiresAt(Date.now() + result.expires_in_seconds * 1_000);
@@ -95,7 +96,7 @@ export default function TelegramBinding() {
             <small>Choose a private, unguessable ID for real use. Console demos start with <code>console-</code>.</small>
           </label>
           <button className="button primary full" type="button" disabled={busy} onClick={() => void register()}>{busy ? "Requesting…" : "Generate 15-minute code"}</button>
-          <p className="muted-note">Until binding completes, this agent’s review notifications go to the service operator.</p>
+          <p className="muted-note">Claimed agents require their saved agent-owner secret. Until binding completes, review notifications go to the service operator.</p>
         </article>
 
         {registration ? (
@@ -119,8 +120,8 @@ export default function TelegramBinding() {
       </div>
 
       <div className="honesty-panel">
-        <strong>Phase 0 access model</strong>
-        <p>This helper reflects the current public v0.7.5 API. Agent claiming and secret-protected rebinding arrive with the reviewed v0.8.1 security layer; the Console does not pretend frontend visibility is authentication.</p>
+        <strong>v0.9 access model</strong>
+        <p>Unclaimed agents keep the public binding flow. Claimed agents are rebound only when the matching X-Agent-Secret is present in the agent-owner slot.</p>
       </div>
     </section>
   );

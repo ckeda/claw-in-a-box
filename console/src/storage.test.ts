@@ -1,5 +1,21 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { HISTORY_KEY, MAX_HISTORY, MAX_TOKENS, TOKENS_KEY, loadHistory, loadTokenRecords, saveHistory, saveTokenRecords } from "./storage";
+import {
+  AGENT_CREDENTIAL_KEY,
+  HISTORY_KEY,
+  MAX_HISTORY,
+  MAX_TOKENS,
+  OPERATOR_SESSION_KEY,
+  TOKENS_KEY,
+  clearConsoleData,
+  loadAgentCredential,
+  loadHistory,
+  loadOperatorKey,
+  loadTokenRecords,
+  saveAgentCredential,
+  saveHistory,
+  saveOperatorKey,
+  saveTokenRecords,
+} from "./storage";
 import type { TokenRecord, VerdictHistoryItem } from "./types";
 
 class MemoryStorage implements Storage {
@@ -15,6 +31,28 @@ class MemoryStorage implements Storage {
 describe("bounded local Console state", () => {
   beforeEach(() => {
     Object.defineProperty(globalThis, "localStorage", { value: new MemoryStorage(), configurable: true });
+    Object.defineProperty(globalThis, "sessionStorage", { value: new MemoryStorage(), configurable: true });
+  });
+
+  it("persists only the agent credential in localStorage", () => {
+    saveAgentCredential({ agentId: "agent-1", secret: "agent-secret" });
+    expect(loadAgentCredential()).toEqual({ agentId: "agent-1", secret: "agent-secret" });
+    expect(localStorage.getItem(AGENT_CREDENTIAL_KEY)).toContain("agent-secret");
+
+    saveOperatorKey("operator-secret");
+    expect(loadOperatorKey()).toBe("operator-secret");
+    expect(sessionStorage.getItem(OPERATOR_SESSION_KEY)).toBe("operator-secret");
+    expect(localStorage.getItem(OPERATOR_SESSION_KEY)).toBeNull();
+    expect(JSON.stringify(localStorage)).not.toContain("operator-secret");
+  });
+
+  it("clears both persistent and session-scoped Console data", () => {
+    saveAgentCredential({ agentId: "agent-1", secret: "agent-secret" });
+    saveOperatorKey("operator-secret");
+    clearConsoleData();
+    expect(loadAgentCredential()).toBeNull();
+    expect(loadOperatorKey()).toBe("");
+    expect(sessionStorage.getItem(OPERATOR_SESSION_KEY)).toBeNull();
   });
 
   it("caps verdict history", () => {
