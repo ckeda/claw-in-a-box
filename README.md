@@ -26,7 +26,7 @@ Project home: **https://clawinabox.xyz** · Live API:
 
 Marketplace listings:
 
-- [ClawGuard on OKX.AI](https://www.okx.ai/agents/5854) — USDT0 on X Layer through the official OKX x402 SDK
+- [Claw-in-a-Box on OKX.AI](https://www.okx.ai/agents/5854) — USDT0 on X Layer through the official OKX x402 SDK
 - [Claw-in-a-Box on Agentic.Market](https://agentic.market/services/api-clawinabox-xyz) — USDC on Base through the Coinbase/x402 Bazaar rail
 
 The repository baseline is v0.8.0 staging; the live mainnet service remains on
