@@ -17,7 +17,7 @@ Project home: **https://clawinabox.xyz** · Live API:
 ([live copy](https://api.clawinabox.xyz/skill.md))
 
 **Live surfaces:** mainnet [api.clawinabox.xyz](https://api.clawinabox.xyz)
-(v0.7.5, frozen through the July 21 submission) · permanent staging
+(v0.9.0) · permanent staging
 [test.clawinabox.xyz](https://test.clawinabox.xyz) (v0.9.0) · Console
 [console.clawinabox.xyz](https://console.clawinabox.xyz) (frozen contest build).
 
@@ -31,7 +31,7 @@ Marketplace listings:
 ```mermaid
 graph TB
     Agent["Buyer / agent"]
-    Main["api.clawinabox.xyz<br/>mainnet · v0.7.5"]
+    Main["api.clawinabox.xyz<br/>mainnet · v0.9.0"]
     Stage["test.clawinabox.xyz<br/>permanent staging · v0.9.0"]
     Console["console.clawinabox.xyz<br/>static observer · frozen build"]
     Router{"Host + path router"}
@@ -343,11 +343,11 @@ judge-reproducible headline.
 
 | Version | Theme | Exact status |
 |---|---|---|
-| v0.7.5 | Production service | **Live mainnet** at `api.clawinabox.xyz`; frozen through the July 21 submission |
-| [v0.8.0](https://github.com/ckeda/claw-in-a-box/tree/v0.8.0) | Memory | **Staging-verified baseline**; tag `v0.8.0` |
-| [v0.8.1](https://github.com/ckeda/claw-in-a-box/pull/2) | Locks | **Implemented, independently reviewed, staging-accepted**; Draft PR #2 |
-| [v0.9.0](https://github.com/ckeda/claw-in-a-box/pull/3) | Face | **Implemented, independently reviewed, deployed to `test.clawinabox.xyz`, owner-accepted, Draft**; PR #3 |
-| v1.0.0 | Promise | **Planned** — frozen `/v1` contract, public guarantees, and deprecation policy |
+| v0.7.5 | Production service | **Historical mainnet release**; superseded by v0.9.0 |
+| [v0.8.0](https://github.com/ckeda/claw-in-a-box/tree/v0.8.0) | Memory | **Merged; persistence live on mainnet**; tag `v0.8.0` |
+| [v0.8.1](https://github.com/ckeda/claw-in-a-box/pull/2) | Locks | **Merged (PR #2); live on mainnet — Pay-to-Claim serving real settlements** |
+| [v0.9.0](https://github.com/ckeda/claw-in-a-box/pull/3) | Face | **Merged (PR #3); live on mainnet and permanent staging** |
+| v1.0.0 | Promise | **In progress** — frozen `/v1` contract, public guarantees, and deprecation policy |
 | v1.1.0 | Probe | **Planned** — trading-policy and MCP discovery experiments with written kill criteria |
 
 See [`CHANGELOG.md`](CHANGELOG.md) for shipped changes and version dates.
@@ -394,7 +394,6 @@ graph TB
     ConsoleDir --> Client["typed API client"]
     ConsoleDir --> Pages["operator views"]
     Docs --> Guarantees["guarantees + reviewed designs"]
-    Docs --> Attribution["Codex self-summary"]
     Plugin --> NANDA["NANDA auth plugin"]
 ```
 
