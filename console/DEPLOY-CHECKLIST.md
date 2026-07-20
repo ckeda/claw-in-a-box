@@ -6,7 +6,7 @@ of this checklist.
 This checklist documents the already-live hackathon build. Do not use it to
 publish the v0.9 repository Console to `console.clawinabox.xyz`; that domain is
 frozen until the owner gives explicit post-judging approval. v0.9 staging
-acceptance lives in `../deploy-v0.9.0-staging-CHECKLIST.md`.
+acceptance lives in `../docs/deploy-v0.9.0-staging-CHECKLIST.md`.
 
 ## Build gate
 
