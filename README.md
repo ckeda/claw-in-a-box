@@ -1,50 +1,30 @@
 # Claw-in-a-Box 🦞📦
 
-> **OpenAI Build Week scope — Developer Tools.** The submission is Claw
-> Console, plus any v0.8.1+ security and persistence increments authored with
-> Codex + GPT-5.6 during the recorded core-build session. The v0.1–v0.8.0
-> service line predates that session: its v0.7.5 mainnet deployment and v0.8.0
-> staging baseline are the existing x402 infrastructure the new work operates
-> on, and are not claimed as Build Week work.
->
-> Codex `/feedback` core-build session:
-> `019f75a2-5efc-70e1-818e-2514176abc6a`.
-
-## Build Week submission map
-
-| Deliverable | Source | Review and deployment status |
-|---|---|---|
-| Operator Console | [`agent/console-build-week`](https://github.com/ckeda/claw-in-a-box/tree/agent/console-build-week) · [Draft PR #1](https://github.com/ckeda/claw-in-a-box/pull/1) | Built from scratch for Build Week; frozen contest build at [console.clawinabox.xyz](https://console.clawinabox.xyz) |
-| v0.8.1 “Locks” | [`agent/v0.8.1`](https://github.com/ckeda/claw-in-a-box/tree/agent/v0.8.1) · [Draft PR #2](https://github.com/ckeda/claw-in-a-box/pull/2) | Independently reviewed and staging-accepted |
-| v0.9.0 “Face” | [`agent/v0.9.0`](https://github.com/ckeda/claw-in-a-box/tree/agent/v0.9.0) · [Draft PR #3](https://github.com/ckeda/claw-in-a-box/pull/3) | Independently reviewed, owner-accepted, and live on permanent staging at [test.clawinabox.xyz](https://test.clawinabox.xyz) |
-
-For exact Codex/owner attribution, commits, test counts, and artifact hashes,
-read the [Codex/GPT-5.6 self-summary](https://github.com/ckeda/claw-in-a-box/blob/agent/v0.9.0/docs/GPT-BUILD-WEEK-SELF-SUMMARY.md).
-**Boundary:** v0.1–v0.8.0 is pre-existing infrastructure, not submission work.
-
-**Bounded authorization for AI agents.** Your agent is the claw — it can
-grab, spend, and act. Claw-in-a-Box is the box: it limits what the claw can
-reach, how much it can spend, and for how long, with a human pull cord for
-high-risk actions.
+**Your agent asks before it spends.** Bounded authorization for AI agents:
+your agent is the claw — it can grab, spend, and act. Claw-in-a-Box is the box:
+it limits what the claw can reach, how much it can spend, and for how long,
+with a human pull cord for high-risk actions.
 
 Claw-in-a-Box is the human-approval layer for AI agent commerce. It combines
 deterministic spend-policy verdicts, attenuating capability tokens, Telegram
 human-in-the-loop approvals, and two production x402 payment rails in one API.
+
+## Live surfaces and marketplace listings
 
 Project home: **https://clawinabox.xyz** · Live API:
 **https://api.clawinabox.xyz** ([`/healthz`](https://api.clawinabox.xyz/healthz))
 · Agent-facing API reference: [`service/SKILL.md`](service/SKILL.md)
 ([live copy](https://api.clawinabox.xyz/skill.md))
 
+**Live surfaces:** mainnet [api.clawinabox.xyz](https://api.clawinabox.xyz)
+(v0.7.5, frozen through the July 21 submission) · permanent staging
+[test.clawinabox.xyz](https://test.clawinabox.xyz) (v0.9.0) · Console
+[console.clawinabox.xyz](https://console.clawinabox.xyz) (frozen contest build).
+
 Marketplace listings:
 
 - [Claw-in-a-Box on OKX.AI](https://www.okx.ai/agents/5854) — USDT0 on X Layer through the official OKX x402 SDK
 - [Claw-in-a-Box on Agentic.Market](https://agentic.market/services/api-clawinabox-xyz) — USDC on Base through the Coinbase/x402 Bazaar rail
-
-**Live surfaces:** mainnet [api.clawinabox.xyz](https://api.clawinabox.xyz)
-(v0.9.0) · permanent staging
-[test.clawinabox.xyz](https://test.clawinabox.xyz) (v0.9.0) · Console
-[console.clawinabox.xyz](https://console.clawinabox.xyz) (frozen contest build).
 
 ## System architecture
 
@@ -83,23 +63,16 @@ the UI—enforces identity, policy, persistence, payment, and human decisions.
 ## Claw Console
 
 [`console/`](https://github.com/ckeda/claw-in-a-box/tree/agent/console-build-week/console)
-contains the public, browser-only operator workbench for
-the July 2026 OpenAI Build Week submission. It visualizes live service health,
+contains the public, browser-only operator workbench for the live service.
+It visualizes live service health,
 guard verdicts, Telegram approvals, token delegation trees, binding, and policy
 presets while a typed safety layer prevents any paid-route request.
-
-Submission framing: **an operator console + security/persistence hardening I
-built with Codex for my already-live x402 service.** The Console is the new
-Build Week product; the live API it calls is pre-existing production
-infrastructure. Only later server increments actually authored in the same
-recorded Codex session belong to the submission.
 
 The Console is an independently deployable static SPA. Its visitor tools need
 no key; v0.9 agent-owner and operator views are enforced by the service's new
 read/recovery APIs. See its
 [`README`](https://github.com/ckeda/claw-in-a-box/blob/agent/console-build-week/console/README.md)
-for judge mode, local setup, tests, and the human
-publication checklist.
+for local setup, tests, and operational notes.
 
 ## What it does
 
@@ -281,6 +254,26 @@ graph LR
 The operator credential exposes the cross-agent approval list, but it is not a
 superuser token: it cannot read an owner's spend or perform owner mutations.
 
+## Honest guarantees
+
+### One idea, three enforcement surfaces
+
+The design thesis of this project is that *bounded authorization* — a grant
+that can only shrink as it moves, and dies with its ancestors — is one
+abstraction that should be enforced wherever an agent acts, at whatever
+guarantee strength that surface supports:
+
+| surface | instance | guarantee grade |
+|---|---|---|
+| HTTP service | this repo's token + guard API | gateway-enforced |
+| agent-protocol simulation | [NANDA Town](https://github.com/projnanda/nandatown) `auth: delegatable` plugin ([`plugins/nandatown/`](plugins/nandatown/)) | gateway-enforced, adversarially validated |
+| on-chain smart accounts | session-key constraint compiler (roadmap) | protocol-enforced |
+
+The same policy primitives can be carried across these surfaces; what changes
+is who enforces them. That distinction is spelled out honestly in
+[`docs/guarantees.md`](docs/guarantees.md): a gateway can refuse to bless an
+action, but only a protocol can make the action impossible.
+
 ## Quickstart
 
 Call the hosted free API without an account:
@@ -300,75 +293,6 @@ curl -s -X POST "$BASE/v1/tokens/delegate" \
 
 Full endpoint shapes, policy schemas, error codes, payment behavior, and
 recommended agent patterns are documented in [`service/SKILL.md`](service/SKILL.md).
-
-## One idea, three enforcement surfaces
-
-The design thesis of this project is that *bounded authorization* — a grant
-that can only shrink as it moves, and dies with its ancestors — is one
-abstraction that should be enforced wherever an agent acts, at whatever
-guarantee strength that surface supports:
-
-| surface | instance | guarantee grade |
-|---|---|---|
-| HTTP service | this repo's token + guard API | gateway-enforced |
-| agent-protocol simulation | [NANDA Town](https://github.com/projnanda/nandatown) `auth: delegatable` plugin ([`plugins/nandatown/`](plugins/nandatown/)) | gateway-enforced, adversarially validated |
-| on-chain smart accounts | session-key constraint compiler (roadmap) | protocol-enforced |
-
-The same policy primitives can be carried across these surfaces; what changes
-is who enforces them. That distinction is spelled out honestly in
-[`docs/guarantees.md`](docs/guarantees.md): a gateway can refuse to bless an
-action, but only a protocol can make the action impossible.
-
-## Repository history and layout
-
-Production service sources live in `service/`; `plugins/nandatown/` contains
-the NANDA protocol integration, `docs/` records guarantee boundaries, and the
-browser Console lives in `console/`. Versions v0.2.0–v0.7.5 shipped as
-reviewed deployment artifacts during a rapid NANDA → OKX.AI → x402 Bazaar
-sprint rather than as repository commits; their release history and the return
-to this repository at v0.8.0 are recorded in [`CHANGELOG.md`](CHANGELOG.md).
-
-```text
-service/
-  server.js           production HTTP service
-  storage.js          optional MySQL persistence
-  landing.js          API landing page template
-  status.js           status page and probes
-  SKILL.md            agent-facing API documentation
-  test-v2.js          38-check baseline suite across six boot modes
-  test-v081.js        v0.8.1 security, payment, audit, and restart suite
-  test-v09.js         v0.9 reads, recovery, rate/CORS, and fail-closed suite
-  package.json        deployable service manifest
-  package-lock.json   locked Node 18-compatible dependency graph
-plugins/nandatown/    NANDA auth plugin, validators, scenario, and tests
-docs/guarantees.md    enforcement guarantees and honest boundaries
-docs/v0.9.0-design.md reviewed Face API, data, threat, and Console design
-CHANGELOG.md          release history, including artifact-only versions
-llms.txt              root-site machine-readable project summary
-console/              static operator Console and Build Week submission
-```
-
-```mermaid
-graph TB
-    Repo["claw-in-a-box/"]
-    Repo --> Service["service/"]
-    Repo --> ConsoleDir["console/"]
-    Repo --> Docs["docs/"]
-    Repo --> Plugin["plugins/nandatown/"]
-    Service --> Server["server.js · HTTP + policy"]
-    Service --> Storage["storage.js · MySQL"]
-    Service --> Tests["test-v2 · test-v081 · test-v09"]
-    ConsoleDir --> Client["typed API client"]
-    ConsoleDir --> Pages["operator views"]
-    Docs --> Guarantees["guarantees + reviewed designs"]
-    Docs --> Attribution["Codex self-summary"]
-    Plugin --> NANDA["NANDA auth plugin"]
-```
-
-The service history through v0.8.0 documents the production context and must
-not be presented as work created during the Build Week Codex session. The
-submission history starts with the Console branch and continues with only the
-v0.8.1+ increments authored and reviewed after that baseline.
 
 ## Self-hosting and tests
 
@@ -419,14 +343,60 @@ judge-reproducible headline.
 
 | Version | Theme | Exact status |
 |---|---|---|
-| v0.7.5 | Production service | **Previous mainnet release**; superseded by v0.9.0 |
+| v0.7.5 | Production service | **Live mainnet** at `api.clawinabox.xyz`; frozen through the July 21 submission |
 | [v0.8.0](https://github.com/ckeda/claw-in-a-box/tree/v0.8.0) | Memory | **Staging-verified baseline**; tag `v0.8.0` |
 | [v0.8.1](https://github.com/ckeda/claw-in-a-box/pull/2) | Locks | **Implemented, independently reviewed, staging-accepted**; Draft PR #2 |
-| [v0.9.0](https://github.com/ckeda/claw-in-a-box/pull/3) | Face | **Implemented, independently reviewed, live on mainnet and permanent staging**; PR #3 |
+| [v0.9.0](https://github.com/ckeda/claw-in-a-box/pull/3) | Face | **Implemented, independently reviewed, deployed to `test.clawinabox.xyz`, owner-accepted, Draft**; PR #3 |
 | v1.0.0 | Promise | **Planned** — frozen `/v1` contract, public guarantees, and deprecation policy |
 | v1.1.0 | Probe | **Planned** — trading-policy and MCP discovery experiments with written kill criteria |
 
 See [`CHANGELOG.md`](CHANGELOG.md) for shipped changes and version dates.
+
+## Repository history and layout
+
+Production service sources live in `service/`; `plugins/nandatown/` contains
+the NANDA protocol integration, `docs/` records guarantee boundaries, and the
+browser Console lives in `console/`. Versions v0.2.0–v0.7.5 shipped as
+reviewed deployment artifacts during a rapid NANDA → OKX.AI → x402 Bazaar
+sprint rather than as repository commits; their release history and the return
+to this repository at v0.8.0 are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+
+```text
+service/
+  server.js           production HTTP service
+  storage.js          optional MySQL persistence
+  landing.js          API landing page template
+  status.js           status page and probes
+  SKILL.md            agent-facing API documentation
+  test-v2.js          38-check baseline suite across six boot modes
+  test-v081.js        v0.8.1 security, payment, audit, and restart suite
+  test-v09.js         v0.9 reads, recovery, rate/CORS, and fail-closed suite
+  package.json        deployable service manifest
+  package-lock.json   locked Node 18-compatible dependency graph
+plugins/nandatown/    NANDA auth plugin, validators, scenario, and tests
+docs/guarantees.md    enforcement guarantees and honest boundaries
+docs/v0.9.0-design.md reviewed Face API, data, threat, and Console design
+CHANGELOG.md          release history, including artifact-only versions
+llms.txt              root-site machine-readable project summary
+console/              static operator Console
+```
+
+```mermaid
+graph TB
+    Repo["claw-in-a-box/"]
+    Repo --> Service["service/"]
+    Repo --> ConsoleDir["console/"]
+    Repo --> Docs["docs/"]
+    Repo --> Plugin["plugins/nandatown/"]
+    Service --> Server["server.js · HTTP + policy"]
+    Service --> Storage["storage.js · MySQL"]
+    Service --> Tests["test-v2 · test-v081 · test-v09"]
+    ConsoleDir --> Client["typed API client"]
+    ConsoleDir --> Pages["operator views"]
+    Docs --> Guarantees["guarantees + reviewed designs"]
+    Docs --> Attribution["Codex self-summary"]
+    Plugin --> NANDA["NANDA auth plugin"]
+```
 
 ## License
 
