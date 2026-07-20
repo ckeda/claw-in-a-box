@@ -42,7 +42,7 @@ Marketplace listings:
 - [Claw-in-a-Box on Agentic.Market](https://agentic.market/services/api-clawinabox-xyz) — USDC on Base through the Coinbase/x402 Bazaar rail
 
 **Live surfaces:** mainnet [api.clawinabox.xyz](https://api.clawinabox.xyz)
-(v0.7.5, frozen through the July 21 submission) · permanent staging
+(v0.9.0) · permanent staging
 [test.clawinabox.xyz](https://test.clawinabox.xyz) (v0.9.0) · Console
 [console.clawinabox.xyz](https://console.clawinabox.xyz) (frozen contest build).
 
@@ -419,10 +419,10 @@ judge-reproducible headline.
 
 | Version | Theme | Exact status |
 |---|---|---|
-| v0.7.5 | Production service | **Live mainnet** at `api.clawinabox.xyz`; frozen through the July 21 submission |
+| v0.7.5 | Production service | **Previous mainnet release**; superseded by v0.9.0 |
 | [v0.8.0](https://github.com/ckeda/claw-in-a-box/tree/v0.8.0) | Memory | **Staging-verified baseline**; tag `v0.8.0` |
 | [v0.8.1](https://github.com/ckeda/claw-in-a-box/pull/2) | Locks | **Implemented, independently reviewed, staging-accepted**; Draft PR #2 |
-| [v0.9.0](https://github.com/ckeda/claw-in-a-box/pull/3) | Face | **Implemented, independently reviewed, deployed to `test.clawinabox.xyz`, owner-accepted, Draft**; PR #3 |
+| [v0.9.0](https://github.com/ckeda/claw-in-a-box/pull/3) | Face | **Implemented, independently reviewed, live on mainnet and permanent staging**; PR #3 |
 | v1.0.0 | Promise | **Planned** — frozen `/v1` contract, public guarantees, and deprecation policy |
 | v1.1.0 | Probe | **Planned** — trading-policy and MCP discovery experiments with written kill criteria |
 
