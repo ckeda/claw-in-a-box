@@ -51,7 +51,7 @@ Marketplace listings:
 ```mermaid
 graph TB
     Agent["Buyer / agent"]
-    Main["api.clawinabox.xyz<br/>mainnet · v0.7.5"]
+    Main["api.clawinabox.xyz<br/>mainnet · v0.9.0"]
     Stage["test.clawinabox.xyz<br/>permanent staging · v0.9.0"]
     Console["console.clawinabox.xyz<br/>static observer · frozen build"]
     Router{"Host + path router"}
