@@ -225,7 +225,7 @@ async function main() {
     // healthz reports the new layer
     let r = await fetch("http://127.0.0.1:8814/healthz");
     let d = await r.json();
-    ok("healthz: version 0.8.0", d.version === "0.8.0", `version=${d.version}`);
+    ok("healthz: version 0.8.1", d.version === "0.8.1", `version=${d.version}`);
     ok("healthz: cdp_x402_enabled", d.features?.cdp_x402_enabled === true);
 
     // api host: paid route challenges through CDP (Base / USDC)

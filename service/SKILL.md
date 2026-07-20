@@ -6,7 +6,9 @@ delegate less than you hold; revoke once, kill the whole subtree.
 
 - **Base URL**: `{{BASE_URL}}` (this service runs on two hosts with
   different payment rails - see "Deployments" below; verify with `GET /healthz`)
-- **Auth**: none required for the demo deployment
+- **Auth**: public endpoints remain unauthenticated for unclaimed agents.
+  Claimed identity mutations use `X-Agent-Secret`; a claimed agent in strict
+  mode also requires that header on guard checks.
 - **Format**: JSON in, JSON out. All POST bodies are `application/json`.
 - **Companion**: the same protocol ships as a NANDA Town auth plugin
   (`auth: delegatable`) with adversarial validators — see
@@ -78,6 +80,7 @@ Request fields:
 | `amount` | number | yes for spends | in whatever unit your policy uses |
 | `destination` | string | no | checked against allowlist rules if present |
 | `policy` | string or object | no | preset name (`conservative` / `standard` / `permissive`, default `standard`) or an inline policy object (schema below) |
+| `bind` | boolean | no | when `true`, an `allow` (or later human approval) also returns a one-shot execution `verdict_id` |
 
 Response:
 
@@ -128,6 +131,23 @@ Rule semantics: `spend_limit` denies when a single amount exceeds
 `"mode": "off"` to disable); `require_approval` downgrades the verdict
 to `review` above the threshold; `time_window` denies outside the given
 UTC hour ranges. `deny` always wins over `review`.
+
+For execution binding, send `"bind": true`. An allowed decision includes
+`{"verdict_id":"...","expires_in_seconds":300}`. Present that id once:
+
+```bash
+curl -s -X POST "$BASE/v1/verdicts/$VERDICT_ID/consume" -d '{}'
+```
+
+The first consume returns 200; a second returns `409 already_consumed` with
+the first consumption time. Unknown or expired ids return 404. If a bound
+allow is not consumed before expiry, its same-day spend charge is refunded.
+Pending ids survive a single-instance restart with only their remaining
+expiry. Human approval is final for that request: an approved request is
+charged at resolution without re-evaluating machine limits, and may push the
+day over its cap by design; subsequent automated verdicts see the higher
+ledger total and tighten naturally. Without `bind`, the v0.8 response shape is
+unchanged.
 
 ### POST /v1/tokens — issue a root capability
 
@@ -210,9 +230,63 @@ cover the request before serving it.
   stop an agent that ignores a `deny` — for protocol-grade enforcement
   of the same policy semantics, compile them to on-chain session-key
   constraints (on the roadmap).
-- Demo deployment state (revocations, daily totals) is in-memory: it
-  resets on restart and daily totals reset at UTC midnight. Do not use
-  the hosted demo for production funds.
+- In `PERSISTENCE=on`, revocations, today's spend, bindings, pending
+  approvals, claimed identities, verdict rows, and audit events are persisted.
+  Pending verdicts hydrate on restart and re-arm their remaining expiry; a
+  verdict that expired during downtime is refunded by the first boot sweep.
+  Runtime verdict consumption remains Map-authoritative, so this is a
+  single-instance restart guarantee, not multi-replica coordination.
+
+## Pay-to-Claim identity
+
+Agent ids are claimed only through x402 payment—there is no free claim path:
+
+```text
+POST /paid/v1/agents/claim      {"agent_id":"my-agent"}
+POST /paid-okx/v1/agents/claim {"agent_id":"my-agent"}
+```
+
+After the normal 402 handshake and successful settlement, the first claim
+returns HTTP 201:
+
+```json
+{
+  "agent_id": "my-agent",
+  "agent_secret": "<shown exactly once>",
+  "claimed_at": "2026-07-19T00:00:00.000Z",
+  "claimed_by": "0x...payer wallet"
+}
+```
+
+The `claimed_by` value serialized into the 201 response is the
+facilitator-verified payer and is provisional until settlement completes. The
+settlement payer is the durable on-chain ground truth. If the two differ, the
+claim remains valid, `claimed_by` is stored from settlement, and the service
+records `claim_payer_mismatch` in both audit history and `/healthz` counters.
+
+Store `agent_secret` immediately; only its SHA-256 hash is retained. A repeated
+claim returns `409 already_claimed` and is not settled. Rotate a secret with:
+
+```bash
+curl -s -X POST "$BASE/v1/agents/rotate" \
+  -H "X-Agent-Secret: $AGENT_SECRET" \
+  -d '{"agent_id":"my-agent"}'
+```
+
+Rotation atomically invalidates the old secret and returns the replacement
+once. Toggle strict guard authentication with:
+
+```bash
+curl -s -X POST "$BASE/v1/agents/strict" \
+  -H "X-Agent-Secret: $AGENT_SECRET" \
+  -d '{"agent_id":"my-agent","strict":true}'
+```
+
+The response is `{"agent_id":"my-agent","strict_mode":true}`; send
+`"strict":false` to turn it off. Claim, rotation, and strict-mode changes
+return `503 feature_disabled` unless the deployment is using a connected,
+hydrated MySQL database with `PERSISTENCE=on`. Never put the secret in a query
+string or JSON body.
 
 
 ## Paid endpoints (x402 pay-per-call)
@@ -222,6 +296,8 @@ these are the endpoints listed on OKX.AI (A2MCP):
 
 - `POST /paid/v1/guard/check` — same request/response as the free route.
 - `POST /paid/v1/tokens/verify` — same request/response as the free route.
+- `POST /paid/v1/agents/claim` — paid-only identity claim; the `/paid-okx`
+  mirror uses the OKX rail.
 
 Flow (x402 v2, official OKX Payment SDK, A2MCP standard):
 
@@ -246,7 +322,8 @@ approval, no money. By default this goes to the service operator, but
 phone**:
 
 1. `POST /v1/operators/register` with `{"agent_id":"<your-agent>"}` →
-   returns a one-time `bind_code`.
+   returns a one-time `bind_code`. If the id is claimed, also send its
+   `X-Agent-Secret`; unclaimed ids retain the legacy flow.
 2. Message the Claw-in-a-Box bot on Telegram: `/bind <bind_code>`.
 3. From then on, any `review` for that `agent_id` is sent to *your*
    chat with Approve / Deny buttons. Unbound agents fall back to the
@@ -274,10 +351,10 @@ becomes an `allow`. Enforce before, not audit after.
 
 ## Self-hosting
 
-One dependency (Express), Node.js >= 18:
+Node.js >= 18 and MySQL for persistent identity features:
 
 ```bash
 npm install
 GUARD_SECRET=$(openssl rand -hex 32) PORT=8787 node server.js
-node test.js   # 12-case smoke suite, exits 0 on success
+node test-all.js
 ```

@@ -31,6 +31,23 @@ secret, TLS in front, callers routed through it):
 | tokens cannot be forged or broadened offline | HMAC-SHA256 chain over canonical JSON; constant-time comparison |
 | a token is only accepted from its bound audience | `verify` with `presenter` set (callers should always set it) |
 | per-tx / daily / allowlist / time-window verdicts are deterministic | pure rule evaluation; `deny` dominates `review` dominates `allow` |
+| a claimed agent id cannot be rebound without its secret | paid claim inserts a unique database row; only a SHA-256 secret hash is stored and compared with `timingSafeEqual` |
+| the payment wallet anchors a claim | settlement payer is durable `claimed_by`; a verify/settle mismatch preserves the paid claim and emits audit plus health telemetry |
+| a bound verdict cannot be consumed twice by this service | one-shot runtime state transition, hydrated when pending after restart; the second consume returns `409 already_consumed` |
+| an abandoned bound verdict does not permanently poison same-day budget | unconsumed expiry marks the verdict expired and refunds its same-day ledger charge |
+
+## Three enforcement surfaces in this release
+
+| surface | grade | exact promise |
+|---|---|---|
+| capability tokens and claimed identity mutations | gateway-enforced | the service rejects invalid chains, revoked ancestors, unauthenticated claimed mutations, and strict guard calls without the agent secret |
+| `bind:true` verdicts | execution-bound at the gateway | the service issues one short-lived id and accepts one consume; an executor that requires successful consume closes check-without-spend and spend-twice inside this gateway's trust boundary |
+| Telegram human approval | advisory after hand-off | the service will not turn `review` into `allow` without a human resolution, but it cannot force an external wallet or agent to honor that result |
+
+`execution-bound` is not the same as protocol-enforced. It becomes meaningful
+only when the component performing the irreversible action refuses to proceed
+without a successful consume. A malicious caller can still bypass the gateway
+and submit a transaction directly.
 
 ## What it deliberately does not guarantee
 
@@ -42,10 +59,16 @@ secret, TLS in front, callers routed through it):
 - **The operator is trusted.** Whoever holds `GUARD_SECRET` can mint any
   token. Cascading revocation protects against leaked *tokens*, not a
   leaked *secret*. Rotate the secret to invalidate the world.
-- **Demo-deployment state is ephemeral.** Revocations and daily spend
-  totals live in memory: a restart forgets revocations (fail-open for
-  previously revoked trees) and daily totals reset at UTC midnight.
-  Do not point production funds at an in-memory deployment.
+- **Persistence has an explicit mode boundary.** In `off` and `shadow`, memory
+  remains runtime truth and restart guarantees do not apply. In `on`, the
+  service hydrates revocations, today's spend, bindings, pending approvals,
+  pending verdicts, and claimed identities. Claim, rotation, and strict-mode
+  changes fail closed with 503 unless that database is connected and hydrated;
+  they never fall back to memory.
+- **Verdict consume state is single-instance.** Pending verdicts hydrate and
+  re-arm expiry after restart, but the live consume decision follows the
+  runtime Map by design. Do not run multiple active replicas and claim global
+  exactly-once execution.
 - **No confidentiality.** Tokens are signed, not encrypted; scopes and
   audiences are readable by anyone holding the token. Treat tokens as
   bearer credentials and transport them over TLS only.
