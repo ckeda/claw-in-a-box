@@ -1,12 +1,14 @@
 {
   "name": "claw-in-a-box-repository",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
   "description": "Repository wrapper for the Claw-in-a-Box service and protocol integrations",
   "main": "service/server.js",
   "scripts": {
     "start": "npm --prefix service start",
-    "test": "npm --prefix service test"
+    "test": "npm --prefix service test",
+    "test:console": "npm --prefix console test",
+    "build:console": "npm --prefix console run build"
   },
   "engines": {
     "node": ">=18"

@@ -10,4 +10,7 @@ nohup.out
 *.pfx
 credentials*.json
 secrets/
+console/dist/
+console/.vite/
+*.tsbuildinfo
 .DS_Store

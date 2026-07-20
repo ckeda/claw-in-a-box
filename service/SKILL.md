@@ -288,6 +288,66 @@ return `503 feature_disabled` unless the deployment is using a connected,
 hydrated MySQL database with `PERSISTENCE=on`. Never put the secret in a query
 string or JSON body.
 
+## v0.9 operational reads
+
+These reads require `PERSISTENCE=on` with a connected, hydrated database. They
+return `503 feature_disabled` rather than falling back to memory.
+
+**Operator approval feed.** The list is a god-view and accepts only the one
+host-managed operator bearer key:
+
+```bash
+curl -s "$BASE/v1/approvals?status=pending&limit=25" \
+  -H "Authorization: Bearer $OPERATOR_BEARER_KEY"
+```
+
+`status` is optional (`pending|approved|denied|expired`); `limit` is 1–100 and
+defaults to 25. Results are newest first and follow the existing approximately
+30-minute approval retention. The operator key grants no mutation and does not
+bypass any agent-secret check.
+
+**Agent-owner spend.** A claimed agent can read its current daily total and its
+latest 50 v0.9-forward ledger changes:
+
+```bash
+curl -s "$BASE/v1/agents/my-agent/spend" \
+  -H "X-Agent-Secret: $AGENT_SECRET"
+```
+
+History is observational and PII-minimized: it contains deltas, balance-after,
+reason, reference id, and time, but no wallet, destination, policy, Telegram
+chat, or secret. It is never used to authorize spend.
+
+**Public metrics.** `GET /v1/metrics` returns a fixed, 15-second-cached schema
+of aggregate counts only. It has no filters and never includes agent ids,
+wallets, destinations, chats, event payloads, individual amounts, or revenue.
+
+## Wallet-signature secret recovery
+
+`POST /v1/agents/recover` has two phases. First issue a challenge:
+
+```json
+{"agent_id":"my-agent"}
+```
+
+The response includes a five-minute `nonce`, canonical `message`, and
+`expires_at`. Sign the exact message using EIP-191 `personal_sign`, then submit:
+
+```json
+{"agent_id":"my-agent","nonce":"...","signature":"0x..."}
+```
+
+On success the response contains a new one-time `agent_secret`; the old secret
+is invalid immediately. The nonce is domain-bound, stored only as SHA-256,
+consumed once in the same transaction as the rotation, and swept after expiry.
+Issue and verify phases are separately rate-limited with `Retry-After`.
+
+v0.9 recovery supports EOA/EIP-191 wallets only. Claimers using contract
+wallets (EIP-1271), custodians, or any signer unable to produce the claiming
+wallet's EIP-191 signature must use manual operator recovery. Recovery fails
+closed with 503 unless the durable claimed identity and nonce store are ready.
+Never place a nonce, signature, agent secret, or operator key in a URL or log.
+
 
 ## Paid endpoints (x402 pay-per-call)
 

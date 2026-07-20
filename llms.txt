@@ -1,0 +1,26 @@
+# Claw-in-a-Box
+> Bounded authorization for AI agents: your agent asks before it spends.
+
+Claw-in-a-Box is an already-live dual-rail x402 service with capability tokens,
+spend-policy verdicts, Telegram human approval, persistence, paid agent claiming,
+strict identity mode, one-shot execution bindings, and an operator Console.
+
+## Operator Console
+- Purpose: operate and inspect the service without moving enforcement into the frontend.
+- Access tiers: visitor; agent owner with X-Agent-Secret; operator with a session-only bearer key.
+- Console source and v0.8.1+ hardening were built with Codex + GPT-5.6 for OpenAI Build Week.
+- The v0.1-v0.8.0 production backend is prior infrastructure, not claimed as Build Week work.
+
+## Canonical resources
+- Homepage: https://clawinabox.xyz/
+- API health: https://api.clawinabox.xyz/healthz
+- Machine/API guide: https://api.clawinabox.xyz/skill.md
+- Documentation: https://clawinabox.xyz/documentation.html
+- Public repository: https://github.com/ckeda/claw-in-a-box
+
+## Safety and access
+- Public NANDA endpoints remain free and backward compatible.
+- Approval lists require the operator bearer key.
+- Per-agent spend history and owner mutations require that agent's X-Agent-Secret.
+- Public metrics are aggregate-only and contain no agent, wallet, destination, or chat identifiers.
+- Never send secrets in URLs, logs, or prompts. Paid routes require an explicit x402 payment flow.
